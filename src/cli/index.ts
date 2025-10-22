@@ -9,13 +9,46 @@ import chalk from 'chalk';
 import { Orckit } from '../core/orckit.js';
 import { parseConfig } from '../core/config/parser.js';
 import { resolveDependencies, visualizeDependencyGraph } from '../core/dependency/resolver.js';
+import { initializeDebugLogging, debugConfig, LogLevel } from '../utils/logger.js';
 
 const program = new Command();
 
 program
   .name('orc')
   .description('Process orchestration tool for local development environments')
-  .version('0.1.0');
+  .version('0.1.0')
+  .option('-d, --debug', 'Enable debug logging')
+  .option('--log-level <level>', 'Set log level (DEBUG, INFO, WARN, ERROR)', 'INFO')
+  .hook('preAction', (thisCommand) => {
+    const opts = thisCommand.opts();
+
+    // Enable debug logging if --debug flag is provided or ORCKIT_DEBUG env is set
+    if (opts.debug || process.env.ORCKIT_DEBUG || process.env.DEBUG) {
+      debugConfig.setEnabled(true);
+    }
+
+    // Set log level
+    const levelStr = opts.logLevel?.toUpperCase() || process.env.ORCKIT_LOG_LEVEL?.toUpperCase() || 'INFO';
+    switch (levelStr) {
+      case 'DEBUG':
+        debugConfig.setLevel(LogLevel.DEBUG);
+        break;
+      case 'INFO':
+        debugConfig.setLevel(LogLevel.INFO);
+        break;
+      case 'WARN':
+        debugConfig.setLevel(LogLevel.WARN);
+        break;
+      case 'ERROR':
+        debugConfig.setLevel(LogLevel.ERROR);
+        break;
+      default:
+        debugConfig.setLevel(LogLevel.INFO);
+    }
+
+    // Initialize debug logging from environment
+    initializeDebugLogging();
+  });
 
 /**
  * Start command
@@ -44,6 +77,18 @@ program
       });
 
       await orckit.start(processes.length > 0 ? processes : undefined);
+
+      // Show tmux keybinding help
+      console.log(chalk.cyan('📺 Attaching to tmux session...\n'));
+      console.log(chalk.gray('Tmux keybindings:'));
+      console.log(chalk.gray('  Ctrl+b w       - Show window list'));
+      console.log(chalk.gray('  Ctrl+b 0-9     - Switch to window number'));
+      console.log(chalk.gray('  Ctrl+b n/p     - Next/Previous window'));
+      console.log(chalk.gray('  Ctrl+b d       - Detach from session'));
+      console.log(chalk.gray('  Ctrl+b ?       - Show all keybindings\n'));
+
+      // Attach to tmux session to show overview
+      await orckit.attach();
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
       process.exit(1);

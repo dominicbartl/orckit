@@ -7,10 +7,13 @@ import {
   isDockerRunning,
   isTmuxAvailable,
   getNodeVersion,
-  isPortAvailable,
 } from '../../utils/system.js';
 import type { OrckitConfig, PreflightCheckResult } from '../../types/index.js';
 import { extractPorts, hasDockerProcesses } from '../config/parser.js';
+import { checkPorts, formatPortConflictMessage } from '../../utils/port.js';
+import { createDebugLogger } from '../../utils/logger.js';
+
+const debug = createDebugLogger('PreflightChecks');
 
 /**
  * Preflight check function
@@ -52,25 +55,56 @@ export const BUILTIN_CHECKS: PreflightCheck[] = [
 ];
 
 /**
- * Create port availability check
+ * Create port availability check with detailed conflict information
  */
 export function createPortCheck(config: OrckitConfig): PreflightCheck {
+  let conflictDetails: string | undefined;
+
   return {
     name: 'port_availability',
     check: async () => {
       const ports = extractPorts(config);
 
-      for (const port of ports) {
-        const available = await isPortAvailable(port);
-        if (!available) {
-          return false;
-        }
+      if (ports.length === 0) {
+        debug.debug('No ports found in configuration');
+        return true;
       }
 
-      return true;
+      debug.info('Checking port availability', { ports });
+
+      const conflicts = await checkPorts(ports);
+
+      if (conflicts.length === 0) {
+        debug.info('All ports are available', { ports });
+        return true;
+      }
+
+      // Build detailed error message with process information
+      debug.warn('Port conflicts detected', {
+        count: conflicts.length,
+        ports: conflicts.map((c) => c.port),
+      });
+
+      const conflictMessages = conflicts.map((conflict) => {
+        if (conflict.user) {
+          return formatPortConflictMessage(conflict.port, conflict.user);
+        } else {
+          return `Port ${conflict.port} is already in use by another process`;
+        }
+      });
+
+      conflictDetails = conflictMessages.join('\n\n---\n\n');
+
+      return false;
     },
-    errorMessage: 'Required ports are already in use',
-    fixSuggestion: 'Stop conflicting processes or update port configuration',
+    get errorMessage() {
+      if (conflictDetails) {
+        return `Port conflicts detected:\n\n${conflictDetails}`;
+      }
+      return 'Required ports are already in use';
+    },
+    fixSuggestion:
+      'Stop the conflicting processes or update your configuration to use different ports',
   };
 }
 

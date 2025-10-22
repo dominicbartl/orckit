@@ -1,0 +1,169 @@
+version: "1"
+project: "fullstack-saas-app"
+
+# Define tmux window categories
+categories:
+  infrastructure:
+    window: "infra"
+  backend:
+    window: "backend"
+  frontend:
+    window: "frontend"
+  tools:
+    window: "tools"
+
+# Define processes
+processes:
+  # Infrastructure layer
+  postgres:
+    category: infrastructure
+    type: docker
+    command: "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=myapp postgres:15"
+    ready:
+      type: tcp
+      host: localhost
+      port: 5432
+      timeout: 30000
+
+  redis:
+    category: infrastructure
+    type: docker
+    command: "docker run --rm -p 6379:6379 redis:7-alpine"
+    ready:
+      type: tcp
+      host: localhost
+      port: 6379
+      timeout: 10000
+
+  # Backend layer (depends on infrastructure)
+  api-server:
+    category: backend
+    type: node
+    command: "pnpm run dev"
+    cwd: "./api"
+    dependencies: [postgres, redis]
+    env:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: "postgresql://postgres:dev@localhost:5432/myapp"
+      REDIS_URL: "redis://localhost:6379"
+    ready:
+      type: http
+      url: "http://localhost:3000/health"
+      timeout: 60000
+    hooks:
+      pre_start: "pnpm install"
+    output:
+      format:
+        timestamp: true
+        prefix: "API"
+      filter:
+        highlight_patterns:
+          - pattern: "ERROR|Error"
+            color: "red"
+          - pattern: "WARN|Warning"
+            color: "yellow"
+          - pattern: "Server listening"
+            color: "green"
+    restart: on-failure
+    max_retries: 3
+
+  worker-queue:
+    category: backend
+    type: node
+    command: "pnpm run worker"
+    cwd: "./worker"
+    dependencies: [postgres, redis, api-server]
+    env:
+      NODE_ENV: development
+      DATABASE_URL: "postgresql://postgres:dev@localhost:5432/myapp"
+      REDIS_URL: "redis://localhost:6379"
+    hooks:
+      pre_start: "pnpm install"
+    output:
+      format:
+        timestamp: true
+        prefix: "WORKER"
+
+  # Frontend layer (depends on API)
+  admin-dashboard:
+    category: frontend
+    type: angular
+    command: "pnpm run start --port 4200"
+    cwd: "./admin-dashboard"
+    dependencies: [api-server]
+    integration:
+      mode: deep
+    env:
+      API_URL: "http://localhost:3000"
+    hooks:
+      pre_start: "pnpm install"
+    output:
+      filter:
+        suppress_patterns:
+          - ".*node_modules.*"
+        highlight_patterns:
+          - pattern: "Compiled successfully"
+            color: "green"
+          - pattern: "Failed to compile"
+            color: "red"
+
+  customer-portal:
+    category: frontend
+    type: angular
+    command: "pnpm run start --port 4201"
+    cwd: "./customer-portal"
+    dependencies: [api-server]
+    integration:
+      mode: deep
+    env:
+      API_URL: "http://localhost:3000"
+    hooks:
+      pre_start: "pnpm install"
+    output:
+      filter:
+        suppress_patterns:
+          - ".*node_modules.*"
+        highlight_patterns:
+          - pattern: "Compiled successfully"
+            color: "green"
+          - pattern: "Failed to compile"
+            color: "red"
+
+  # Tools layer
+  api-docs:
+    category: tools
+    type: node
+    command: "npx swagger-ui-watcher swagger.yaml"
+    cwd: "./api"
+    dependencies: [api-server]
+    env:
+      PORT: "8080"
+
+# Global hooks
+hooks:
+  pre_start_all: "echo '🚀 Starting Full-Stack SaaS Application...'"
+  post_start_all: "echo '✅ All services are ready! Admin Dashboard: http://localhost:4200 | Customer Portal: http://localhost:4201 | API: http://localhost:3000 | API Docs: http://localhost:8080'"
+
+# Preflight checks
+preflight:
+  checks:
+    - name: "docker"
+      command: "docker --version"
+      error: "Docker is not installed or not running"
+      fix: "Install Docker Desktop from https://www.docker.com/products/docker-desktop"
+
+    - name: "node"
+      command: "node --version"
+      error: "Node.js is not installed"
+      fix: "Install Node.js from https://nodejs.org/"
+
+# Boot configuration
+orckit:
+  boot:
+    style: timeline
+    show_preflight: true
+    show_graph: true
+    show_progress_bars: true
+    show_hooks: true
+    show_timing: true

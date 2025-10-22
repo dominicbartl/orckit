@@ -12,6 +12,10 @@ import type {
   LogPatternReadyCheck,
   CustomReadyCheck,
 } from '../../types/index.js';
+import { checkPort, formatPortConflictMessage } from '../../utils/port.js';
+import { createDebugLogger } from '../../utils/logger.js';
+
+const debug = createDebugLogger('HealthChecker');
 
 /**
  * Result of a health check attempt
@@ -36,6 +40,8 @@ export class HttpHealthChecker implements HealthChecker {
   constructor(private config: HttpReadyCheck) {}
 
   async check(): Promise<HealthCheckResult> {
+    debug.debug('Checking HTTP endpoint', { url: this.config.url });
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000); // 5s per attempt
@@ -50,17 +56,52 @@ export class HttpHealthChecker implements HealthChecker {
       const expectedStatus = this.config.expectedStatus ?? 200;
 
       if (response.status === expectedStatus) {
+        debug.debug('HTTP check successful', {
+          url: this.config.url,
+          status: response.status,
+        });
         return {
           success: true,
           message: `HTTP ${response.status} OK`,
         };
       } else {
+        debug.debug('HTTP check failed - unexpected status', {
+          url: this.config.url,
+          expected: expectedStatus,
+          actual: response.status,
+        });
         return {
           success: false,
           message: `Expected status ${expectedStatus}, got ${response.status}`,
         };
       }
     } catch (error) {
+      debug.debug('HTTP check failed', {
+        url: this.config.url,
+        error: error instanceof Error ? error.message : error,
+      });
+
+      // Try to extract port and provide port conflict info
+      const urlMatch = this.config.url.match(/:(\d+)/);
+      if (urlMatch) {
+        const port = parseInt(urlMatch[1], 10);
+        if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
+          const portCheck = await checkPort(port);
+          if (!portCheck.available && portCheck.user) {
+            const detailedMessage = formatPortConflictMessage(port, portCheck.user);
+            debug.info('Port conflict detected for HTTP check', {
+              port,
+              user: portCheck.user,
+            });
+            return {
+              success: false,
+              message: detailedMessage,
+              error: error,
+            };
+          }
+        }
+      }
+
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -77,6 +118,11 @@ export class TcpHealthChecker implements HealthChecker {
   constructor(private config: TcpReadyCheck) {}
 
   async check(): Promise<HealthCheckResult> {
+    debug.debug('Checking TCP connection', {
+      host: this.config.host,
+      port: this.config.port,
+    });
+
     return new Promise((resolve) => {
       const socket = createConnection({
         host: this.config.host,
@@ -86,13 +132,44 @@ export class TcpHealthChecker implements HealthChecker {
 
       socket.on('connect', () => {
         socket.end();
+        debug.debug('TCP connection successful', {
+          host: this.config.host,
+          port: this.config.port,
+        });
         resolve({
           success: true,
           message: `TCP connection to ${this.config.host}:${this.config.port} successful`,
         });
       });
 
-      socket.on('error', (error) => {
+      socket.on('error', async (error) => {
+        debug.debug('TCP connection failed', {
+          host: this.config.host,
+          port: this.config.port,
+          error: error.message,
+        });
+
+        // Check if port is in use and provide detailed info
+        if (error.message.includes('ECONNREFUSED') && this.config.host === 'localhost') {
+          const portCheck = await checkPort(this.config.port);
+          if (!portCheck.available && portCheck.user) {
+            const detailedMessage = formatPortConflictMessage(
+              this.config.port,
+              portCheck.user
+            );
+            debug.info('Port conflict detected', {
+              port: this.config.port,
+              user: portCheck.user,
+            });
+            resolve({
+              success: false,
+              message: detailedMessage,
+              error,
+            });
+            return;
+          }
+        }
+
         resolve({
           success: false,
           message: error.message,
@@ -102,6 +179,10 @@ export class TcpHealthChecker implements HealthChecker {
 
       socket.on('timeout', () => {
         socket.destroy();
+        debug.debug('TCP connection timeout', {
+          host: this.config.host,
+          port: this.config.port,
+        });
         resolve({
           success: false,
           message: 'Connection timeout',

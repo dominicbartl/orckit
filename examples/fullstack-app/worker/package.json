@@ -1,0 +1,17 @@
+{
+  "name": "fullstack-app-worker",
+  "version": "1.0.0",
+  "description": "Background worker queue for processing jobs",
+  "main": "worker.js",
+  "scripts": {
+    "worker": "node worker.js",
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "redis": "^4.6.10",
+    "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

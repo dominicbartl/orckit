@@ -1,0 +1,5 @@
+packages:
+  - 'api'
+  - 'worker'
+  - 'admin-dashboard'
+  - 'customer-portal'

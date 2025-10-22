@@ -306,13 +306,20 @@ export default defineConfig({
 
 ## Documentation
 
+### Guides
+
+- [Tmux Integration Guide](TMUX_INTEGRATION.md) - **NEW!** Complete guide to tmux integration and window switching
+- [Debug Logging Guide](DEBUG_LOGGING.md) - Enable debug mode to see what's happening
+- [Port Checking Guide](PORT_CHECKING.md) - Understanding port conflicts and resolution
+
+### Reference Documentation
+
 - [Getting Started](docs/getting-started.md)
 - [Configuration Reference](docs/configuration.md)
 - [Process Types](docs/process-types.md)
 - [Health Checks](docs/health-checks.md)
 - [Hooks](docs/hooks.md)
 - [Output Filtering](docs/output-filtering.md)
-- [tmux Integration](docs/tmux-integration.md)
 - [CLI Reference](docs/cli-reference.md)
 - [Programmatic API](docs/programmatic-api.md)
 - [Build Integration](docs/build-integration.md)

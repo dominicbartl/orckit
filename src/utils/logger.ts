@@ -7,6 +7,172 @@ import dayjs from 'dayjs';
 import type { OutputConfig } from '../types/index.js';
 
 /**
+ * Debug logging levels
+ */
+export enum LogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3,
+  SILENT = 4,
+}
+
+/**
+ * Global debug logger configuration
+ */
+class DebugLoggerConfig {
+  private level: LogLevel = LogLevel.INFO;
+  private enabled = false;
+
+  setLevel(level: LogLevel) {
+    this.level = level;
+  }
+
+  getLevel(): LogLevel {
+    return this.level;
+  }
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  shouldLog(level: LogLevel): boolean {
+    return this.enabled && level >= this.level;
+  }
+}
+
+export const debugConfig = new DebugLoggerConfig();
+
+/**
+ * Initialize debug logging from environment or config
+ */
+export function initializeDebugLogging() {
+  const debugEnv = process.env.ORCKIT_DEBUG || process.env.DEBUG;
+
+  if (debugEnv) {
+    debugConfig.setEnabled(true);
+
+    // Parse debug level from environment
+    const levelStr = (process.env.ORCKIT_LOG_LEVEL || '').toUpperCase();
+    switch (levelStr) {
+      case 'DEBUG':
+        debugConfig.setLevel(LogLevel.DEBUG);
+        break;
+      case 'INFO':
+        debugConfig.setLevel(LogLevel.INFO);
+        break;
+      case 'WARN':
+        debugConfig.setLevel(LogLevel.WARN);
+        break;
+      case 'ERROR':
+        debugConfig.setLevel(LogLevel.ERROR);
+        break;
+      default:
+        debugConfig.setLevel(LogLevel.DEBUG);
+    }
+  }
+}
+
+/**
+ * Debug logger for internal operations
+ */
+export class DebugLogger {
+  constructor(private component: string) {}
+
+  private formatMessage(level: string, message: string, ...args: unknown[]): string {
+    const timestamp = dayjs().format('HH:mm:ss.SSS');
+    const levelColor = this.getLevelColor(level);
+    const componentColor = chalk.cyan;
+
+    let msg = `${chalk.gray(`[${timestamp}]`)} ${levelColor(`[${level}]`)} ${componentColor(`[${this.component}]`)} ${message}`;
+
+    if (args.length > 0) {
+      const formattedArgs = args.map(arg =>
+        typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+      ).join(' ');
+      msg += ` ${chalk.gray(formattedArgs)}`;
+    }
+
+    return msg;
+  }
+
+  private getLevelColor(level: string): (str: string) => string {
+    switch (level) {
+      case 'DEBUG':
+        return chalk.blue;
+      case 'INFO':
+        return chalk.green;
+      case 'WARN':
+        return chalk.yellow;
+      case 'ERROR':
+        return chalk.red;
+      default:
+        return chalk.white;
+    }
+  }
+
+  debug(message: string, ...args: unknown[]) {
+    if (debugConfig.shouldLog(LogLevel.DEBUG)) {
+      console.log(this.formatMessage('DEBUG', message, ...args));
+    }
+  }
+
+  info(message: string, ...args: unknown[]) {
+    if (debugConfig.shouldLog(LogLevel.INFO)) {
+      console.log(this.formatMessage('INFO', message, ...args));
+    }
+  }
+
+  warn(message: string, ...args: unknown[]) {
+    if (debugConfig.shouldLog(LogLevel.WARN)) {
+      console.log(this.formatMessage('WARN', message, ...args));
+    }
+  }
+
+  error(message: string, ...args: unknown[]) {
+    if (debugConfig.shouldLog(LogLevel.ERROR)) {
+      console.error(this.formatMessage('ERROR', message, ...args));
+    }
+  }
+
+  /**
+   * Log with timing information
+   */
+  time(label: string): () => void {
+    const start = Date.now();
+    this.debug(`⏱️  ${label} started`);
+
+    return () => {
+      const duration = Date.now() - start;
+      this.debug(`⏱️  ${label} completed in ${formatDuration(duration)}`);
+    };
+  }
+
+  /**
+   * Log a group of related operations
+   */
+  group(label: string, fn: () => void | Promise<void>): void | Promise<void> {
+    this.debug(`📂 ${label}`);
+    const result = fn();
+    if (result instanceof Promise) {
+      return result.finally(() => this.debug(`📂 ${label} ✓`));
+    }
+    this.debug(`📂 ${label} ✓`);
+  }
+}
+
+/**
+ * Create a debug logger for a component
+ */
+export function createDebugLogger(component: string): DebugLogger {
+  return new DebugLogger(component);
+}
+
+/**
  * Process-specific logger with filtering and formatting
  */
 export class ProcessLogger {

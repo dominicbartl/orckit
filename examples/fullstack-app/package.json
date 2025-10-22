@@ -1,0 +1,17 @@
+{
+  "name": "fullstack-saas-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack SaaS application example for Orckit",
+  "scripts": {
+    "orc": "node ../../dist/cli/index.js",
+    "start": "pnpm run orc start",
+    "stop": "pnpm run orc stop"
+  },
+  "workspaces": [
+    "api",
+    "worker",
+    "admin-dashboard",
+    "customer-portal"
+  ]
+}
