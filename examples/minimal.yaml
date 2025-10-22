@@ -1,0 +1,16 @@
+version: "1"
+project: "minimal-example"
+
+processes:
+  hello:
+    category: main
+    command: "echo 'Hello from Orckit!'"
+    ready:
+      type: exit-code
+
+  world:
+    category: main
+    command: "echo 'World!' && sleep 2"
+    dependencies: [hello]
+    ready:
+      type: exit-code

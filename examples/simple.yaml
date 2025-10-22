@@ -1,0 +1,125 @@
+version: "1"
+project: "simple-example"
+
+# Define tmux window categories
+categories:
+  infrastructure:
+    window: "infra"
+  backend:
+    window: "backend"
+  frontend:
+    window: "frontend"
+
+# Define processes
+processes:
+  # Infrastructure layer
+  postgres:
+    category: infrastructure
+    type: docker
+    command: "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15"
+    ready:
+      type: tcp
+      host: localhost
+      port: 5432
+      timeout: 30000
+
+  redis:
+    category: infrastructure
+    type: docker
+    command: "docker run --rm -p 6379:6379 redis:7"
+    ready:
+      type: tcp
+      host: localhost
+      port: 6379
+      timeout: 30000
+
+  # Backend layer (depends on infrastructure)
+  api:
+    category: backend
+    type: node
+    command: "npm run dev"
+    cwd: "./api"
+    dependencies: [postgres, redis]
+    env:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: "postgresql://postgres:dev@localhost:5432/myapp"
+      REDIS_URL: "redis://localhost:6379"
+    ready:
+      type: http
+      url: "http://localhost:3000/health"
+      timeout: 60000
+    hooks:
+      pre_start: "npm install"
+      post_start: "echo 'API is ready!'"
+    output:
+      format:
+        timestamp: true
+        prefix: "API"
+      filter:
+        highlight_patterns:
+          - pattern: "ERROR|Error"
+            color: "red"
+          - pattern: "WARN|Warning"
+            color: "yellow"
+    restart: on-failure
+    max_retries: 3
+
+  # Frontend layer (depends on API)
+  webpack:
+    category: frontend
+    type: webpack
+    command: "npm run build:watch"
+    cwd: "./web"
+    dependencies: [api]
+    integration:
+      mode: deep
+    config: "./web/webpack.config.js"
+    output:
+      filter:
+        suppress_patterns:
+          - "asset.*"
+          - ".*node_modules.*"
+        highlight_patterns:
+          - pattern: "Compiled successfully"
+            color: "green"
+          - pattern: "Failed to compile"
+            color: "red"
+
+  frontend:
+    category: frontend
+    type: node
+    command: "npm start"
+    cwd: "./web"
+    dependencies: [webpack]
+    env:
+      PORT: "4200"
+      API_URL: "http://localhost:3000"
+    ready:
+      type: log-pattern
+      pattern: "Compiled successfully"
+      timeout: 120000
+    restart: on-failure
+
+# Global hooks
+hooks:
+  pre_start_all: "echo 'Starting development environment...'"
+  post_start_all: "echo 'All services are ready!'"
+
+# Preflight checks
+preflight:
+  checks:
+    - name: "node_modules"
+      command: "test -d ./api/node_modules && test -d ./web/node_modules"
+      error: "Dependencies not installed"
+      fix: "Run: npm install in both ./api and ./web directories"
+
+# Boot configuration
+maestro:
+  boot:
+    style: timeline
+    show_preflight: true
+    show_graph: true
+    show_progress_bars: true
+    show_hooks: true
+    show_timing: true
