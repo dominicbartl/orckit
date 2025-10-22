@@ -11,13 +11,13 @@
     "workflow",
     "build-tools"
   ],
-  "homepage": "https://github.com/dominicbartl/orkkit#readme",
+  "homepage": "https://github.com/dominicbartl/orckit#readme",
   "bugs": {
-    "url": "https://github.com/dominicbartl/orkkit/issues"
+    "url": "https://github.com/dominicbartl/orckit/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dominicbartl/orkkit.git"
+    "url": "git+https://github.com/dominicbartl/orckit.git"
   },
   "license": "MIT",
   "author": "Dominic Bartl",

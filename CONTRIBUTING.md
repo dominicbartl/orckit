@@ -9,7 +9,7 @@ Please be respectful and constructive in all interactions with the project and c
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/orkkit.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/orckit.git`
 3. Install dependencies: `pnpm install`
 4. Create a branch: `git checkout -b feature/my-feature`
 
