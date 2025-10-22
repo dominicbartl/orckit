@@ -4,13 +4,13 @@
 
 import { EventEmitter } from 'events';
 import type { ProcessConfig, ProcessStatus, BuildInfo } from '../types/index.js';
-import type { ExecaChildProcess } from 'execa';
+import type { ResultPromise } from 'execa';
 
 /**
  * Base process runner
  */
 export abstract class ProcessRunner extends EventEmitter {
-  protected process: ExecaChildProcess | null = null;
+  protected process: ResultPromise | null = null;
   protected _status: ProcessStatus = 'pending';
   protected _buildInfo: BuildInfo | null = null;
   protected startTime: Date | null = null;

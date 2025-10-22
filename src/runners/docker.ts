@@ -51,7 +51,7 @@ export class DockerRunner extends ProcessRunner {
     });
 
     // Handle exit
-    void this.process.on('exit', (code, signal) => {
+    void this.process.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
       this.stopTime = new Date();
       this._pid = null;
 
