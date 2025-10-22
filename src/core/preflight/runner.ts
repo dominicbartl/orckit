@@ -46,7 +46,7 @@ export async function runPreflight(config: OrckitConfig): Promise<PreflightCheck
         error: passed ? undefined : check.errorMessage,
         fixSuggestion: passed ? undefined : check.fixSuggestion,
       });
-    } catch (error) {
+    } catch (_error) {
       const duration = Date.now() - startTime;
 
       results.push({

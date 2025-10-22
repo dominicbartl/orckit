@@ -251,7 +251,7 @@ export class StatusMonitor extends EventEmitter {
         memory: Math.round(memory * 10) / 10,
         uptime,
       };
-    } catch (error) {
+    } catch (_error) {
       // Process may have exited
       return undefined;
     }

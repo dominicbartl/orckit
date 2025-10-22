@@ -93,11 +93,8 @@ export function maestro(options: MaestroVitePluginOptions): Plugin {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     configureServer(server: any) {
       // Development server specific hooks
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       server.httpServer?.once('listening', () => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const address = server.httpServer?.address();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         const port = address && typeof address === 'object' ? (address.port as number) : undefined;
 
         sendEvent({

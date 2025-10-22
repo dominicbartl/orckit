@@ -131,7 +131,7 @@ export async function killProcessTree(pid: number, signal: string = 'SIGTERM'): 
         }
       });
     });
-  } catch (error) {
+  } catch (_error) {
     // Fallback to simple kill
     process.kill(pid, signal);
   }

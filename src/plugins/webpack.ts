@@ -75,7 +75,6 @@ export class MaestroWebpackPlugin {
 
     // Report progress
     if (reportProgress) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
       const progressPlugin = new compiler.webpack.ProgressPlugin(
         (percentage: number, msg: string) => {
           this.sendEvent({
@@ -94,20 +93,15 @@ export class MaestroWebpackPlugin {
     // Hook into compilation complete
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     compiler.hooks.done.tap('MaestroWebpackPlugin', (stats: any) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       const hasErrors = stats.hasErrors() as boolean;
 
       this.sendEvent({
         type: hasErrors ? 'build:failed' : 'build:complete',
         processName,
         success: !hasErrors,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         duration: stats.endTime && stats.startTime ? stats.endTime - stats.startTime : 0,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         errors: stats.compilation.errors.length as number,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         warnings: stats.compilation.warnings.length as number,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         hash: stats.hash as string,
         timestamp: new Date().toISOString(),
       });
