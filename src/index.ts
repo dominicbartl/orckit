@@ -6,6 +6,17 @@
 
 // Core API
 export { Orckit } from './core/orckit.js';
+export { Orchestrator } from './core/orchestrator.js';
+
+// Status monitoring
+export { StatusMonitor, formatStatusSnapshot, formatCompactStatus } from './core/status/index.js';
+export type {
+  ProcessResourceUsage,
+  BuildMetrics,
+  ProcessStatusInfo,
+  StatusSnapshot,
+  StatusMonitorOptions,
+} from './core/status/index.js';
 
 // Types
 export type {

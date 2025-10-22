@@ -14,43 +14,64 @@ export function setupAutocomplete(): void {
 
   // Complete commands
   completion.on('command', ({ reply }: { reply: (items: string[]) => void }) => {
-    reply(['start', 'stop', 'restart', 'status', 'list', 'validate', 'logs', 'attach', 'completion']);
+    reply([
+      'start',
+      'stop',
+      'restart',
+      'status',
+      'list',
+      'validate',
+      'logs',
+      'attach',
+      'completion',
+    ]);
   });
 
   // Complete process names for relevant commands
-  completion.on('args', ({ reply, line, fragment }: { reply: (items: string[]) => void; line: string; fragment: string }) => {
-    // Try to load config
-    let processNames: string[] = [];
+  completion.on(
+    'args',
+    ({
+      reply,
+      line,
+      fragment,
+    }: {
+      reply: (items: string[]) => void;
+      line: string;
+      fragment: string;
+    }) => {
+      // Try to load config
+      let processNames: string[] = [];
 
-    try {
-      // Look for config file
-      const configPaths = ['./orckit.yaml', './orckit.yml', './.orckit/config.yaml'];
-      const configPath = configPaths.find((p) => existsSync(p));
+      try {
+        // Look for config file
+        const configPaths = ['./orckit.yaml', './orckit.yml', './.orckit/config.yaml'];
+        const configPath = configPaths.find((p) => existsSync(p));
 
-      if (configPath) {
-        const config = parseConfig(configPath);
-        processNames = Object.keys(config.processes);
+        if (configPath) {
+          const config = parseConfig(configPath);
+          processNames = Object.keys(config.processes);
+        }
+      } catch {
+        // Ignore config errors during autocomplete
       }
-    } catch {
-      // Ignore config errors during autocomplete
-    }
 
-    // Suggest process names for relevant commands
-    if (
-      line.includes('start') ||
-      line.includes('stop') ||
-      line.includes('restart') ||
-      line.includes('logs') ||
-      line.includes('attach')
-    ) {
-      reply(processNames);
-    }
+      // Suggest process names for relevant commands
+      if (
+        line.includes('start') ||
+        line.includes('stop') ||
+        line.includes('restart') ||
+        line.includes('logs') ||
+        line.includes('attach')
+      ) {
+        reply(processNames);
+      }
 
-    // Suggest config file paths for -c flag
-    if (fragment === '-c' || line.endsWith('-c ')) {
-      reply(['./orckit.yaml', './orckit.yml', './.orckit/config.yaml']);
+      // Suggest config file paths for -c flag
+      if (fragment === '-c' || line.endsWith('-c ')) {
+        reply(['./orckit.yaml', './orckit.yml', './.orckit/config.yaml']);
+      }
     }
-  });
+  );
 
   completion.init();
 }

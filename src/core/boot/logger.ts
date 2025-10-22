@@ -84,9 +84,7 @@ export class BootLogger {
     if (this.style === 'quiet') return;
 
     this.totalProcesses = count;
-    console.log(
-      chalk.cyan('━━━ Starting Processes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-    );
+    console.log(chalk.cyan('━━━ Starting Processes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
   }
 
   /**
@@ -138,7 +136,7 @@ export class BootLogger {
   /**
    * Print health check attempt
    */
-  printHealthCheckAttempt(_processName: string, attempt: number, message: string): void{
+  printHealthCheckAttempt(_processName: string, attempt: number, message: string): void {
     if (this.style === 'quiet') return;
 
     if (this.style === 'timeline') {
@@ -161,16 +159,20 @@ export class BootLogger {
   /**
    * Print process ready
    */
-  printProcessReady(processName: string, duration: number, info?: string): void {
+  printProcessReady(processName: string, duration?: number, info?: string): void {
     if (this.style === 'quiet') return;
 
-    const time = formatDuration(duration);
+    const time = duration ? formatDuration(duration) : '';
 
     if (this.style === 'timeline') {
-      console.log(chalk.green(`        ✓  Ready ${info ? `| ${info} ` : ''}(${time})`));
+      console.log(
+        chalk.green(`        ✓  Ready ${info ? `| ${info} ` : ''}${time ? `(${time})` : ''}`)
+      );
       console.log(); // Blank line between processes
     } else if (this.style === 'minimal') {
-      console.log(chalk.green(`  ✓ ${processName}`.padEnd(30) + `ready (${time})`));
+      console.log(
+        chalk.green(`  ✓ ${processName}`.padEnd(30) + `ready${time ? ` (${time})` : ''}`)
+      );
     }
   }
 
@@ -186,11 +188,7 @@ export class BootLogger {
   /**
    * Print completion summary
    */
-  printCompletionSummary(
-    successCount: number,
-    failCount: number,
-    urls?: string[]
-  ): void {
+  printCompletionSummary(successCount: number, failCount: number, urls?: string[]): void {
     if (this.style === 'quiet') return;
 
     const totalTime = Date.now() - this.startTime;
@@ -200,9 +198,7 @@ export class BootLogger {
     if (failCount === 0) {
       console.log(chalk.green('  ✓  All processes started successfully!\n'));
     } else {
-      console.log(
-        chalk.yellow(`  ⚠  ${successCount} succeeded, ${failCount} failed\n`)
-      );
+      console.log(chalk.yellow(`  ⚠  ${successCount} succeeded, ${failCount} failed\n`));
     }
 
     console.log(`  Total time: ${formatDuration(totalTime)}\n`);
@@ -216,7 +212,7 @@ export class BootLogger {
     }
 
     console.log(chalk.cyan('  📊 Overview dashboard ready in tmux session\n'));
-    console.log(chalk.gray("  Press Ctrl+B then 0 to view overview"));
+    console.log(chalk.gray('  Press Ctrl+B then 0 to view overview'));
     console.log(chalk.gray("  Run 'orc attach' to connect to processes\n"));
 
     console.log(chalk.cyan('━'.repeat(62)));
@@ -257,5 +253,31 @@ export class BootLogger {
       console.log(`│ ${icon} ${name.padEnd(30)} ${status.padEnd(8)} │`);
     }
     console.log('└──────────────────────────────────────┘\n');
+  }
+
+  /**
+   * Print phase header
+   */
+  printPhaseHeader(phase: string): void {
+    if (this.style === 'quiet') return;
+
+    console.log(chalk.cyan(`\n━━━ ${phase} ${'━'.repeat(Math.max(0, 60 - phase.length - 5))}\n`));
+  }
+
+  /**
+   * Print completion
+   */
+  printCompletion(processCount: number): void {
+    if (this.style === 'quiet') return;
+
+    const totalTime = Date.now() - this.startTime;
+
+    console.log(chalk.cyan('\n━'.repeat(62) + '\n'));
+    console.log(chalk.green(`  ✓  All ${processCount} processes started successfully!\n`));
+    console.log(`  Total time: ${formatDuration(totalTime)}\n`);
+    console.log(chalk.cyan('  📊 Overview dashboard ready in tmux session\n'));
+    console.log(chalk.gray('  Press Ctrl+B then 0 to view overview'));
+    console.log(chalk.gray("  Run 'orc attach' to connect to processes\n"));
+    console.log(chalk.cyan('━'.repeat(62)));
   }
 }

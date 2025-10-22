@@ -32,7 +32,7 @@ export class WebpackRunner extends ProcessRunner {
 
     this._pid = this.process.pid ?? null;
 
-    let buildStartTime: number | null = null;
+    const buildStartTime: number | null = null;
 
     // Handle stdout - parse webpack output
     this.process.stdout?.on('data', (data: Buffer) => {

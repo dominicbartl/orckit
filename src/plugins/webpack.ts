@@ -76,15 +76,17 @@ export class MaestroWebpackPlugin {
     // Report progress
     if (reportProgress) {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-      const progressPlugin = new compiler.webpack.ProgressPlugin((percentage: number, msg: string) => {
-        this.sendEvent({
-          type: 'build:progress',
-          processName,
-          progress: Math.floor(percentage * 100),
-          message: msg,
-          timestamp: new Date().toISOString(),
-        });
-      });
+      const progressPlugin = new compiler.webpack.ProgressPlugin(
+        (percentage: number, msg: string) => {
+          this.sendEvent({
+            type: 'build:progress',
+            processName,
+            progress: Math.floor(percentage * 100),
+            message: msg,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      );
 
       progressPlugin.apply(compiler);
     }
