@@ -45,6 +45,9 @@ importers:
         specifier: ^4.1.12
         version: 4.1.12
     devDependencies:
+      '@eslint/js':
+        specifier: ^9.38.0
+        version: 9.38.0
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
