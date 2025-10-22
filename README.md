@@ -3,7 +3,10 @@
 > Process orchestration tool for local development environments with tmux integration
 
 [![npm version](https://img.shields.io/npm/v/@orckit/cli.svg)](https://www.npmjs.com/package/@orckit/cli)
+[![CI](https://github.com/dominicbartl/orkkit/workflows/CI/badge.svg)](https://github.com/dominicbartl/orkkit/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/dominicbartl/orkkit/branch/main/graph/badge.svg)](https://codecov.io/gh/dominicbartl/orkkit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/node/v/@orckit/cli)](https://nodejs.org)
 
 Orckit is a powerful CLI tool for managing complex local development environments. It orchestrates multiple processes with dependency management, health checks, and beautiful tmux-based monitoring.
 
