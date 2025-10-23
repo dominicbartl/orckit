@@ -7,6 +7,10 @@
  * Based on Catppuccin color palette
  */
 export const TMUX_THEME = `
+# Plugin manager
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'catppuccin/tmux#v2.1.3' # See https://github.com/catppuccin/tmux/tags for additional tags
+
 # Status bar styling
 set-option -g status-style bg=#1e1e2e,fg=#cdd6f4
 
@@ -68,4 +72,10 @@ set-option -g visual-activity off
 # Pane title format
 set-option -g pane-border-format " #T "
 set-option -g pane-border-status top
+
+# Initialize TPM (Tmux Plugin Manager)
+# Note: This requires TPM to be installed at ~/.tmux/plugins/tpm
+# Install with: git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+# Then press prefix + I (capital i) to install plugins
+run '~/.tmux/plugins/tpm/tpm'
 `;

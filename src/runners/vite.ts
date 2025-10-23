@@ -32,13 +32,14 @@ export class ViteRunner extends ProcessRunner {
   /**
    * Start process in tmux pane
    */
-  private async startInTmux(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  private async startInTmux(cwd: string, _env: NodeJS.ProcessEnv): Promise<void> {
     const category = this.config.category ?? 'default';
 
-    // Build command with environment variables
+    // Build command with only custom environment variables from config
     let command = this.config.command;
-    if (Object.keys(env).length > 0) {
-      const envVars = Object.entries(env)
+    const customEnv = this.config.env ?? {};
+    if (Object.keys(customEnv).length > 0) {
+      const envVars = Object.entries(customEnv)
         .map(([key, value]) => `export ${key}="${value}"`)
         .join(' && ');
       command = `${envVars} && ${command}`;

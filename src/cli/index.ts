@@ -10,6 +10,7 @@ import { Orckit } from '../core/orckit.js';
 import { parseConfig } from '../core/config/parser.js';
 import { resolveDependencies, visualizeDependencyGraph } from '../core/dependency/resolver.js';
 import { initializeDebugLogging, debugConfig, LogLevel } from '../utils/logger.js';
+import { launchOverview } from './overview.js';
 
 const program = new Command();
 
@@ -78,17 +79,32 @@ program
 
       await orckit.start(processes.length > 0 ? processes : undefined);
 
-      // Show tmux keybinding help
-      console.log(chalk.cyan('📺 Attaching to tmux session...\n'));
-      console.log(chalk.gray('Tmux keybindings:'));
-      console.log(chalk.gray('  Ctrl+b w       - Show window list'));
-      console.log(chalk.gray('  Ctrl+b 0-9     - Switch to window number'));
-      console.log(chalk.gray('  Ctrl+b n/p     - Next/Previous window'));
-      console.log(chalk.gray('  Ctrl+b d       - Detach from session'));
-      console.log(chalk.gray('  Ctrl+b ?       - Show all keybindings\n'));
+      // Check if we're in an interactive terminal
+      const isInteractive = process.stdout.isTTY && process.stdin.isTTY;
 
-      // Attach to tmux session to show overview
-      await orckit.attach();
+      if (isInteractive) {
+        // Show tmux keybinding help
+        console.log(chalk.cyan('\n📺 Attaching to tmux session...\n'));
+        console.log(chalk.gray('Tmux keybindings:'));
+        console.log(chalk.gray('  Ctrl+b w       - Show window list'));
+        console.log(chalk.gray('  Ctrl+b 0-9     - Switch to window number'));
+        console.log(chalk.gray('  Ctrl+b n/p     - Next/Previous window'));
+        console.log(chalk.gray('  Ctrl+b d       - Detach from session'));
+        console.log(chalk.gray('  Ctrl+b ?       - Show all keybindings\n'));
+
+        // Attach to tmux session to show overview
+        await orckit.attach();
+      } else {
+        // Running in background - keep process alive
+        console.log(chalk.green('\n✓  Orckit is running in background'));
+        console.log(chalk.cyan('  Attach to tmux session: tmux attach -t <session-name>'));
+        console.log(chalk.cyan('  View overview: orc overview\n'));
+
+        // Keep process alive
+        await new Promise(() => {
+          /* never resolves */
+        });
+      }
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
       process.exit(1);
@@ -252,6 +268,50 @@ program
   .action((process: string, _options: { config: string }) => {
     console.log(chalk.yellow(`Attaching to ${process} (not yet implemented)`));
     // TODO: Implement tmux attach
+  });
+
+/**
+ * Overview command - Real-time process monitoring
+ */
+program
+  .command('overview')
+  .description('Launch real-time process overview (interactive dashboard)')
+  .option('-c, --config <path>', 'Path to configuration file')
+  .option('-s, --socket <path>', 'Path to IPC socket')
+  .action(async (options: { config?: string; socket?: string }) => {
+    try {
+      let socketPath: string;
+
+      if (options.socket) {
+        // Socket path provided directly
+        socketPath = options.socket;
+      } else if (options.config) {
+        // Parse config to get project name
+        const config = parseConfig(options.config);
+        const projectName = config.project ?? 'orckit';
+        socketPath = `/tmp/orckit-${projectName}.sock`;
+      } else {
+        // Try to find socket in /tmp
+        const fs = await import('node:fs');
+        const files = fs.readdirSync('/tmp');
+        const socketFiles = files.filter((f) => f.startsWith('orckit-') && f.endsWith('.sock'));
+
+        if (socketFiles.length === 0) {
+          throw new Error('No Orckit IPC socket found. Is Orckit running?');
+        } else if (socketFiles.length === 1) {
+          socketPath = `/tmp/${socketFiles[0]}`;
+        } else {
+          throw new Error(
+            `Multiple Orckit sockets found: ${socketFiles.join(', ')}. Specify one with --socket or --config`
+          );
+        }
+      }
+
+      await launchOverview({ socketPath });
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
   });
 
 /**

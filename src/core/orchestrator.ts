@@ -3,7 +3,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import type { OrckitConfig, ProcessStatus } from '@/types';
+import type { OrckitConfig, ProcessStatus, IPCProcessInfo, CommandMessage } from '@/types';
 import { parseConfig, validateConfig } from './config/parser.js';
 import { resolveDependencies, groupIntoWaves } from './dependency/resolver.js';
 import { StatusMonitor, type StatusSnapshot } from './status/monitor.js';
@@ -14,6 +14,8 @@ import { ProcessRunner } from '@/runners/base.js';
 import { createRunner } from '@/runners/factory.js';
 import { BootLogger } from './boot/logger.js';
 import { createDebugLogger } from '@/utils/logger.js';
+import { IPCServer } from './ipc/server.js';
+import type { Socket } from 'node:net';
 
 const debug = createDebugLogger('Orchestrator');
 
@@ -45,6 +47,11 @@ export interface OrchestratorOptions {
    * Status update interval (ms)
    */
   statusUpdateInterval?: number;
+
+  /**
+   * Enable IPC server for real-time overview
+   */
+  enableIPC?: boolean;
 }
 
 /**
@@ -58,6 +65,7 @@ export class Orchestrator extends EventEmitter {
   private tmuxManager?: TmuxManager;
   private bootLogger: BootLogger;
   private overviewUpdateTimer?: NodeJS.Timeout;
+  private ipcServer?: IPCServer;
 
   constructor(options: OrchestratorOptions) {
     super();
@@ -104,8 +112,14 @@ export class Orchestrator extends EventEmitter {
       this.statusMonitor.on('snapshot', (snapshot: StatusSnapshot) => {
         this.emit('status:update', snapshot);
 
-        // Update tmux overview if enabled
-        if (this.tmuxManager) {
+        // Broadcast to IPC clients
+        if (this.ipcServer) {
+          const processes = this.convertSnapshotToIPCProcesses(snapshot);
+          this.ipcServer.broadcastStatus(processes);
+        }
+
+        // Update tmux overview if enabled (legacy file-based approach)
+        if (this.tmuxManager && !this.ipcServer) {
           const formatted = formatStatusSnapshot(snapshot);
           void this.tmuxManager.updateOverview(formatted);
         }
@@ -118,6 +132,14 @@ export class Orchestrator extends EventEmitter {
       debug.debug('Initializing tmux manager', { project: this.config.project ?? 'orckit' });
       this.tmuxManager = new TmuxManager(this.config.project ?? 'orckit');
       debug.info('Tmux manager initialized');
+    }
+
+    // Initialize IPC server if enabled
+    if (options.enableIPC !== false) {
+      const socketPath = `/tmp/orckit-${this.config.project ?? 'orckit'}.sock`;
+      debug.debug('Initializing IPC server', { socketPath });
+      this.ipcServer = new IPCServer({ socketPath });
+      debug.info('IPC server initialized');
     }
 
     debug.info('Orchestrator initialized successfully');
@@ -162,6 +184,14 @@ export class Orchestrator extends EventEmitter {
       debug.debug('Creating tmux session');
       await this.tmuxManager.createSession();
       debug.info('Tmux session created');
+    }
+
+    // Start IPC server if enabled
+    if (this.ipcServer) {
+      debug.debug('Starting IPC server');
+      await this.ipcServer.start();
+      this.setupIPCHandlers();
+      debug.info('IPC server started');
     }
 
     // Start status monitor
@@ -292,7 +322,7 @@ export class Orchestrator extends EventEmitter {
       });
 
       runner.on('failed', (error: Error) => {
-        debug.error(`Process ${name} failed`, { error: error.message });
+        debug.error(`Process ${name} failed`, { error: error?.message ?? 'Unknown error' });
         this.emit('process:failed', { processName: name, error });
       });
 
@@ -371,6 +401,11 @@ export class Orchestrator extends EventEmitter {
     // Stop status monitor
     if (this.statusMonitor) {
       this.statusMonitor.stop();
+    }
+
+    // Stop IPC server
+    if (this.ipcServer) {
+      await this.ipcServer.stop();
     }
 
     // Kill tmux session
@@ -459,5 +494,88 @@ export class Orchestrator extends EventEmitter {
    */
   getProcessNames(): string[] {
     return this.startOrder;
+  }
+
+  /**
+   * Setup IPC command handlers
+   */
+  private setupIPCHandlers(): void {
+    if (!this.ipcServer) return;
+
+    const server = this.ipcServer.getServer();
+    if (!server) return;
+
+    server.on('ipc:command', async (message: CommandMessage, socket: Socket) => {
+      debug.info('Received IPC command', { action: message.action, process: message.processName });
+
+      try {
+        switch (message.action) {
+          case 'restart':
+            await this.restart([message.processName]);
+            this.ipcServer!.sendCommandResponse(socket, true, `Process ${message.processName} restarted`);
+            break;
+
+          case 'stop':
+            await this.stop([message.processName]);
+            this.ipcServer!.sendCommandResponse(socket, true, `Process ${message.processName} stopped`);
+            break;
+
+          case 'start':
+            await this.startProcess(message.processName);
+            this.ipcServer!.sendCommandResponse(socket, true, `Process ${message.processName} started`);
+            break;
+
+          case 'logs':
+            // TODO: Implement log streaming
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              false,
+              'Log streaming not yet implemented'
+            );
+            break;
+
+          default:
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              false,
+              `Unknown action: ${message.action}`
+            );
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        debug.error('IPC command failed', { error: errorMessage });
+        this.ipcServer!.sendCommandResponse(socket, false, errorMessage);
+      }
+    });
+  }
+
+  /**
+   * Convert status snapshot to IPC process info
+   */
+  private convertSnapshotToIPCProcesses(snapshot: StatusSnapshot): IPCProcessInfo[] {
+    return Array.from(snapshot.processes.values()).map((process) => {
+      // Calculate uptime if process has started
+      const uptime = process.lastStartTime ? Date.now() - process.lastStartTime : undefined;
+
+      // Convert BuildMetrics to BuildInfo
+      const buildInfo = process.buildMetrics
+        ? {
+            progress: process.buildMetrics.progress,
+            duration: process.buildMetrics.duration,
+            errors: process.buildMetrics.errors,
+            warnings: process.buildMetrics.warnings,
+          }
+        : undefined;
+
+      return {
+        name: process.name,
+        status: process.status,
+        category: process.category,
+        uptime,
+        pid: process.pid,
+        restartCount: process.restartCount,
+        buildInfo,
+      };
+    });
   }
 }

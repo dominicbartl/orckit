@@ -13,9 +13,11 @@ export class TmuxManager {
   private windows: Map<string, number> = new Map();
   private overviewPaneId: string | null = null;
   private windowsWithProcesses: Set<string> = new Set();
+  private configFile: string;
 
   constructor(projectName: string = 'orckit') {
     this.sessionName = `${projectName}-dev`;
+    this.configFile = `/tmp/orckit-tmux-${this.sessionName}.conf`;
   }
 
   /**
@@ -39,33 +41,40 @@ export class TmuxManager {
       await execa('tmux', ['kill-session', '-t', this.sessionName]);
     }
 
-    // Create new session (detached)
-    await execa('tmux', ['new-session', '-d', '-s', this.sessionName, '-n', 'overview']);
+    // Write theme configuration to file
+    await this.writeConfigFile();
 
-    // Apply theme configuration
-    await this.applyTheme();
+    // Create new session (detached) with custom config
+    await execa('tmux', [
+      'new-session',
+      '-d',
+      '-s',
+      this.sessionName,
+      '-n',
+      'overview',
+      '-f',
+      this.configFile,
+    ]);
 
     // Create overview pane
     await this.createOverviewPane();
   }
 
   /**
-   * Apply custom tmux theme
+   * Write tmux configuration to file
    */
-  private async applyTheme(): Promise<void> {
-    const commands = TMUX_THEME.split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('#'));
+  private async writeConfigFile(): Promise<void> {
+    const fs = await import('node:fs/promises');
 
-    for (const cmd of commands) {
-      try {
-        await execa('tmux', cmd.split(' '), {
-          env: { TMUX_SESSION: this.sessionName },
-        });
-      } catch {
-        // Ignore theme application errors
-      }
-    }
+    // Clean up TMUX_THEME - remove empty lines and comments
+    const config = TMUX_THEME.split('\n')
+      .filter((line) => {
+        const trimmed = line.trim();
+        return trimmed && !trimmed.startsWith('#');
+      })
+      .join('\n');
+
+    await fs.writeFile(this.configFile, config, 'utf-8');
   }
 
   /**
@@ -93,6 +102,12 @@ export class TmuxManager {
 
     const panes = stdout.split('\n');
     this.overviewPaneId = panes[0]; // Left pane for status
+
+    // Start the interactive overview command in the left pane
+    // The overview command will connect to the IPC socket and display real-time status
+    const cliPath = 'node dist/cli/index.js';
+    const overviewCommand = `${cliPath} overview`;
+    await execa('tmux', ['send-keys', '-t', this.overviewPaneId, overviewCommand, 'C-m']);
   }
 
   /**
@@ -195,14 +210,14 @@ export class TmuxManager {
       return;
     }
 
-    // Clear pane
-    await execa('tmux', ['send-keys', '-t', this.overviewPaneId, 'C-l']);
+    // Write content to the status file
+    // tail -f will automatically display the updates without flickering
+    const statusFile = `/tmp/orckit-status-${this.sessionName}.txt`;
+    const fs = await import('node:fs/promises');
 
-    // Send content line by line
-    const lines = content.split('\n');
-    for (const line of lines) {
-      await execa('tmux', ['send-keys', '-t', this.overviewPaneId, line, 'C-m']);
-    }
+    // Clear the file and write new content
+    // This causes tail -f to show the new content
+    await fs.writeFile(statusFile, content, 'utf-8');
   }
 
   /**
@@ -228,6 +243,14 @@ export class TmuxManager {
   async killSession(): Promise<void> {
     if (await this.sessionExists()) {
       await execa('tmux', ['kill-session', '-t', this.sessionName]);
+    }
+
+    // Clean up config file
+    try {
+      const fs = await import('node:fs/promises');
+      await fs.unlink(this.configFile);
+    } catch {
+      // Ignore errors if file doesn't exist
     }
   }
 

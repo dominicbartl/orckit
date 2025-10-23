@@ -353,3 +353,79 @@ export function isTcpReadyCheck(check: ReadyCheck): check is TcpReadyCheck {
 export function isLogPatternReadyCheck(check: ReadyCheck): check is LogPatternReadyCheck {
   return check.type === 'log-pattern';
 }
+
+/**
+ * IPC Message Types for real-time communication
+ */
+
+/**
+ * Process info for IPC
+ */
+export interface IPCProcessInfo {
+  name: string;
+  status: ProcessStatus;
+  category: string;
+  uptime?: number; // milliseconds
+  pid?: number;
+  restartCount: number;
+  buildInfo?: BuildInfo;
+}
+
+/**
+ * System metrics
+ */
+export interface SystemMetrics {
+  timestamp: Date;
+  cpuUsage?: number; // percentage
+  memoryUsage?: number; // bytes
+}
+
+/**
+ * Status update message (Server → Client)
+ */
+export interface StatusUpdateMessage {
+  type: 'status_update';
+  timestamp: Date;
+  processes: IPCProcessInfo[];
+  systemMetrics?: SystemMetrics;
+}
+
+/**
+ * Command message (Client → Server)
+ */
+export interface CommandMessage {
+  type: 'command';
+  action: 'restart' | 'stop' | 'start' | 'logs';
+  processName: string;
+  options?: Record<string, unknown>;
+}
+
+/**
+ * Command response (Server → Client)
+ */
+export interface CommandResponseMessage {
+  type: 'command_response';
+  success: boolean;
+  message: string;
+  data?: unknown;
+}
+
+/**
+ * Log message (Server → Client)
+ */
+export interface LogMessage {
+  type: 'log';
+  processName: string;
+  timestamp: Date;
+  level: 'stdout' | 'stderr';
+  content: string;
+}
+
+/**
+ * Union type for all IPC messages
+ */
+export type IPCMessage =
+  | StatusUpdateMessage
+  | CommandMessage
+  | CommandResponseMessage
+  | LogMessage;
