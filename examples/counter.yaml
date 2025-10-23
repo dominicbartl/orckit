@@ -1,0 +1,11 @@
+version: "1"
+project: "counter-example"
+
+categories:
+  counters:
+    window: "Counters"
+
+processes:
+  counter:
+    category: counters
+    command: "for i in {1..10000}; do echo \"Count: $i\"; sleep 1; done"

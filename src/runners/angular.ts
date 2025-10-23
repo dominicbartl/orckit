@@ -41,6 +41,40 @@ export class AngularRunner extends ProcessRunner {
       command += ' --progress=false';
     }
 
+    // If tmux is available, run in tmux pane
+    if (this.tmuxManager) {
+      await this.startInTmux(command, cwd, env);
+    } else {
+      await this.startDirectly(command, cwd, env);
+    }
+  }
+
+  /**
+   * Start process in tmux pane
+   */
+  private async startInTmux(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const category = this.config.category ?? 'default';
+
+    // Build command with environment variables
+    if (Object.keys(env).length > 0) {
+      const envVars = Object.entries(env)
+        .map(([key, value]) => `export ${key}="${value}"`)
+        .join(' && ');
+      command = `${envVars} && ${command}`;
+    }
+
+    // Create tmux pane and run command
+    this.paneId = await this.tmuxManager!.createProcessPane(category, this.name, command, cwd);
+
+    // Mark as running (in tmux mode, we can't parse output)
+    this.updateStatus('building');
+    this.emit('ready');
+  }
+
+  /**
+   * Start process directly (without tmux)
+   */
+  private async startDirectly(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     // Execute Angular CLI command
     this.process = execa('bash', ['-c', command], {
       cwd,
@@ -168,6 +202,15 @@ export class AngularRunner extends ProcessRunner {
   }
 
   async stop(): Promise<void> {
+    // If running in tmux, send Ctrl+C to pane
+    if (this.paneId && this.tmuxManager) {
+      await this.tmuxManager.sendKeys(this.paneId, 'C-c');
+      this.paneId = null;
+      this.updateStatus('stopped');
+      return;
+    }
+
+    // Direct execution cleanup
     if (!this.process || !this.process.pid) {
       return;
     }

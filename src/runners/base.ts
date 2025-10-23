@@ -5,6 +5,7 @@
 import { EventEmitter } from 'events';
 import type { ProcessConfig, ProcessStatus, BuildInfo } from '../types/index.js';
 import type { ResultPromise } from 'execa';
+import type { TmuxManager } from '../core/tmux/manager.js';
 
 /**
  * Base process runner
@@ -17,10 +18,12 @@ export abstract class ProcessRunner extends EventEmitter {
   protected stopTime: Date | null = null;
   protected _restartCount = 0;
   protected _pid: number | null = null;
+  protected paneId: string | null = null;
 
   constructor(
     protected name: string,
-    protected config: ProcessConfig
+    protected config: ProcessConfig,
+    protected tmuxManager?: TmuxManager
   ) {
     super();
   }

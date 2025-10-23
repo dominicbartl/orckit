@@ -21,6 +21,41 @@ export class ViteRunner extends ProcessRunner {
     const cwd = this.config.cwd ?? process.cwd();
     const env = getProcessEnv(this.config.env);
 
+    // If tmux is available, run in tmux pane
+    if (this.tmuxManager) {
+      await this.startInTmux(cwd, env);
+    } else {
+      await this.startDirectly(cwd, env);
+    }
+  }
+
+  /**
+   * Start process in tmux pane
+   */
+  private async startInTmux(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const category = this.config.category ?? 'default';
+
+    // Build command with environment variables
+    let command = this.config.command;
+    if (Object.keys(env).length > 0) {
+      const envVars = Object.entries(env)
+        .map(([key, value]) => `export ${key}="${value}"`)
+        .join(' && ');
+      command = `${envVars} && ${command}`;
+    }
+
+    // Create tmux pane and run command
+    this.paneId = await this.tmuxManager!.createProcessPane(category, this.name, command, cwd);
+
+    // Mark as running (in tmux mode, we can't parse output)
+    this.updateStatus('building');
+    this.emit('ready');
+  }
+
+  /**
+   * Start process directly (without tmux)
+   */
+  private async startDirectly(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     // Execute Vite command
     this.process = execa('bash', ['-c', this.config.command], {
       cwd,
@@ -100,6 +135,15 @@ export class ViteRunner extends ProcessRunner {
   }
 
   async stop(): Promise<void> {
+    // If running in tmux, send Ctrl+C to pane
+    if (this.paneId && this.tmuxManager) {
+      await this.tmuxManager.sendKeys(this.paneId, 'C-c');
+      this.paneId = null;
+      this.updateStatus('stopped');
+      return;
+    }
+
+    // Direct execution cleanup
     if (!this.process || !this.process.pid) {
       return;
     }

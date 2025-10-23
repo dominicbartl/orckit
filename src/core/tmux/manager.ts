@@ -12,6 +12,7 @@ export class TmuxManager {
   private sessionName: string;
   private windows: Map<string, number> = new Map();
   private overviewPaneId: string | null = null;
+  private windowsWithProcesses: Set<string> = new Set();
 
   constructor(projectName: string = 'orckit') {
     this.sessionName = `${projectName}-dev`;
@@ -146,23 +147,31 @@ export class TmuxManager {
     ]);
 
     const panes = paneCount.split('\n').filter((p) => p);
+    let paneId: string;
 
-    // If this is not the first pane, split the window
-    if (panes.length > 0) {
-      await execa('tmux', ['split-window', '-t', window, '-v']);
+    // If this is the first process in this window, use the existing pane
+    // Otherwise, split the window to create a new pane
+    if (!this.windowsWithProcesses.has(category)) {
+      // Use the existing pane for the first process in this window
+      paneId = panes[0];
+      this.windowsWithProcesses.add(category);
+    } else {
+      // Split window for subsequent processes
+      // The -P flag prints the new pane ID
+      const { stdout: splitOutput } = await execa('tmux', [
+        'split-window',
+        '-t',
+        window,
+        '-v',
+        '-P',
+        '-F',
+        '#{pane_id}',
+      ]);
+      paneId = splitOutput.trim();
+
+      // Apply tiled layout to organize panes
       await execa('tmux', ['select-layout', '-t', window, 'tiled']);
     }
-
-    // Get the newly created pane ID
-    const { stdout: newPaneId } = await execa('tmux', [
-      'display-message',
-      '-t',
-      window,
-      '-p',
-      '#{pane_id}',
-    ]);
-
-    const paneId = newPaneId.trim();
 
     // Set pane title
     await execa('tmux', ['select-pane', '-t', paneId, '-T', processName]);

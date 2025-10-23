@@ -273,7 +273,7 @@ export class Orchestrator extends EventEmitter {
     try {
       // Create process runner
       debug.debug(`Creating runner for ${name}`, { type: processConfig.type });
-      const runner = createRunner(name, processConfig);
+      const runner = createRunner(name, processConfig, this.tmuxManager);
       debug.debug(`Runner created for ${name}`);
 
       // Register event handlers
