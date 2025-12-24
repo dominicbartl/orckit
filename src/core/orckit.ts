@@ -67,6 +67,11 @@ export interface OrckitOptions extends ConfigManagerOptions {
    * Print process stdout/stderr to terminal (default: false)
    */
   processDebug?: boolean;
+
+  /**
+   * Run in headless mode - disables interactive prompts (default: false)
+   */
+  headless?: boolean;
 }
 
 /**
@@ -115,7 +120,7 @@ export class Orckit extends EventEmitter {
 
   // Options
   private readonly options: Required<
-    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight' | 'processDebug'>
+    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight' | 'processDebug' | 'headless'>
   >;
 
   // State
@@ -132,6 +137,7 @@ export class Orckit extends EventEmitter {
       enableIPC: options.enableIPC ?? true,
       skipPreflight: options.skipPreflight ?? false,
       processDebug: options.processDebug ?? false,
+      headless: options.headless ?? false,
     };
 
     // Initialize ConfigManager (handles config loading and dependency resolution)
@@ -220,7 +226,9 @@ export class Orckit extends EventEmitter {
       debug.debug('Running preflight checks');
       this.bootLogger.printPhaseHeader('Preflight Checks');
 
-      const preflightResults = await runPreflight(this.configManager.getConfig());
+      // In headless mode, disable interactive prompts
+      const interactive = !this.options.headless;
+      const preflightResults = await runPreflight(this.configManager.getConfig(), interactive);
 
       for (const result of preflightResults) {
         this.bootLogger.printPreflightCheck(result);

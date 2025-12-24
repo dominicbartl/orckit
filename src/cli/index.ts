@@ -70,6 +70,7 @@ program
       const orckit = new Orckit({
         configPath: options.config,
         processDebug: globalOpts.processDebug ?? false,
+        headless: options.headless,
       });
 
       // Listen to events
