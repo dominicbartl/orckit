@@ -62,6 +62,11 @@ export interface OrckitOptions extends ConfigManagerOptions {
    * Skip preflight checks (default: false)
    */
   skipPreflight?: boolean;
+
+  /**
+   * Print process stdout/stderr to terminal (default: false)
+   */
+  processDebug?: boolean;
 }
 
 /**
@@ -110,7 +115,7 @@ export class Orckit extends EventEmitter {
 
   // Options
   private readonly options: Required<
-    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight'>
+    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight' | 'processDebug'>
   >;
 
   // State
@@ -126,6 +131,7 @@ export class Orckit extends EventEmitter {
       enableStatusMonitor: options.enableStatusMonitor ?? true,
       enableIPC: options.enableIPC ?? true,
       skipPreflight: options.skipPreflight ?? false,
+      processDebug: options.processDebug ?? false,
     };
 
     // Initialize ConfigManager (handles config loading and dependency resolution)
@@ -171,6 +177,7 @@ export class Orckit extends EventEmitter {
     this.processManager = new ProcessManager({
       statusMonitor: this.statusMonitor ?? undefined,
       bufferManager: this.bufferManager,
+      processDebug: this.options.processDebug,
     });
 
     // Register all processes (so getStatus works before start)

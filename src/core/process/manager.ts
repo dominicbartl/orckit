@@ -11,6 +11,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import chalk from 'chalk';
 import type { ProcessConfig, ProcessStatus } from '../../types/index.js';
 import { ProcessRunner } from '../../runners/base.js';
 import { createRunner } from '../../runners/factory.js';
@@ -45,6 +46,11 @@ export interface ProcessManagerOptions {
    * Optional IPC server for broadcasting events
    */
   ipcServer?: IPCServer;
+
+  /**
+   * Print process stdout/stderr to terminal (default: false)
+   */
+  processDebug?: boolean;
 }
 
 /**
@@ -92,12 +98,14 @@ export class ProcessManager extends EventEmitter {
   private statusMonitor?: StatusMonitor;
   private bufferManager?: OutputBufferManager;
   private ipcServer?: IPCServer;
+  private processDebug: boolean;
 
   constructor(options: ProcessManagerOptions = {}) {
     super();
     this.statusMonitor = options.statusMonitor;
     this.bufferManager = options.bufferManager;
     this.ipcServer = options.ipcServer;
+    this.processDebug = options.processDebug ?? false;
   }
 
   /**
@@ -500,13 +508,16 @@ export class ProcessManager extends EventEmitter {
       this.emit('build:stats', { processName: name, ...stats });
     });
 
-    // Forward stdout/stderr to buffer and IPC
+    // Forward stdout/stderr to buffer, IPC, and optionally terminal
     runner.on('stdout', (data: string) => {
       if (this.bufferManager) {
         this.bufferManager.appendLine(name, data, 'stdout');
       }
       if (this.ipcServer) {
         this.ipcServer.broadcastLog(name, 'stdout', data);
+      }
+      if (this.processDebug) {
+        console.log(chalk.cyan(`[${name}]`) + ' ' + data);
       }
     });
 
@@ -516,6 +527,9 @@ export class ProcessManager extends EventEmitter {
       }
       if (this.ipcServer) {
         this.ipcServer.broadcastLog(name, 'stderr', data);
+      }
+      if (this.processDebug) {
+        console.error(chalk.red(`[${name}]`) + ' ' + data);
       }
     });
   }

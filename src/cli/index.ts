@@ -20,6 +20,7 @@ program
   .version('0.1.0')
   .option('-d, --debug', 'Enable debug logging')
   .option('--log-level <level>', 'Set log level (DEBUG, INFO, WARN, ERROR)', 'INFO')
+  .option('--process-debug', 'Print process stdout/stderr to terminal')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.opts();
 
@@ -63,7 +64,13 @@ program
     try {
       console.log(chalk.cyan('🎭 Orckit - Starting processes...\n'));
 
-      const orckit = new Orckit({ configPath: options.config });
+      // Get global options
+      const globalOpts = program.opts();
+
+      const orckit = new Orckit({
+        configPath: options.config,
+        processDebug: globalOpts.processDebug ?? false,
+      });
 
       // Listen to events
       orckit.on('process:starting', (event: { processName: string }) => {
