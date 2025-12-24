@@ -50,7 +50,7 @@ describe('Angular Runner', () => {
       );
     });
 
-    it('should add --progress=false for deep integration mode', async () => {
+    it('should not modify command for deep integration mode', async () => {
       const { execa } = await import('execa');
       const mockProcess = new EventEmitter() as any;
       mockProcess.pid = 12345;
@@ -71,14 +71,15 @@ describe('Angular Runner', () => {
       const runner = new AngularRunner('angular-app', config);
       await runner.start();
 
+      // Command should be used as-is, no modifications
       expect(execa).toHaveBeenCalledWith(
         'bash',
-        ['-c', 'ng serve --progress=false'],
+        ['-c', 'ng serve'],
         expect.any(Object)
       );
     });
 
-    it('should not add --progress=false if already has --json', async () => {
+    it('should pass custom flags unmodified', async () => {
       const { execa } = await import('execa');
       const mockProcess = new EventEmitter() as any;
       mockProcess.pid = 12345;
@@ -89,7 +90,7 @@ describe('Angular Runner', () => {
 
       const config: ProcessConfig = {
         category: 'frontend',
-        command: 'ng serve --json',
+        command: 'ng serve --port 4200 --open',
         type: 'angular',
         integration: {
           mode: 'deep',
@@ -99,7 +100,7 @@ describe('Angular Runner', () => {
       const runner = new AngularRunner('angular-app', config);
       await runner.start();
 
-      expect(execa).toHaveBeenCalledWith('bash', ['-c', 'ng serve --json'], expect.any(Object));
+      expect(execa).toHaveBeenCalledWith('bash', ['-c', 'ng serve --port 4200 --open'], expect.any(Object));
     });
 
     it('should use custom working directory', async () => {

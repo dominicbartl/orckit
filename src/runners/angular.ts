@@ -35,11 +35,9 @@ export class AngularRunner extends ProcessRunner {
     const cwd = this.config.cwd ?? process.cwd();
     const env = getProcessEnv(this.config.env);
 
-    // Modify command to add --json flag if not present
-    let command = this.config.command;
-    if (this.config.integration?.mode === 'deep' && !command.includes('--json')) {
-      command += ' --progress=false';
-    }
+    // Use command as-is, don't modify it
+    // Note: Angular CLI flags vary by version, let user control them
+    const command = this.config.command;
 
     // Execute Angular CLI command
     this.process = execa('bash', ['-c', command], {

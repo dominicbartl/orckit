@@ -30,7 +30,7 @@ describe('Node Runner', () => {
 
       const config: ProcessConfig = {
         category: 'backend',
-        command: 'console.log("Hello")',
+        command: 'npm start',
         type: 'node',
       };
 
@@ -40,18 +40,17 @@ describe('Node Runner', () => {
       expect(runner.status).toBe('running');
       expect(runner.pid).toBe(12345);
       expect(execa).toHaveBeenCalledWith(
-        'node',
-        ['-e', 'console.log("Hello")'],
+        'bash',
+        ['-c', 'npm start'],
         expect.objectContaining({
           cwd: process.cwd(),
           reject: false,
           all: true,
-          shell: true,
         })
       );
     });
 
-    it('should start a ts-node process when type is ts-node', async () => {
+    it('should execute shell commands (not node -e)', async () => {
       const { execa } = await import('execa');
       const mockProcess = new EventEmitter() as any;
       mockProcess.pid = 12345;
@@ -62,8 +61,8 @@ describe('Node Runner', () => {
 
       const config: ProcessConfig = {
         category: 'backend',
-        command: 'console.log("TypeScript")',
-        type: 'ts-node',
+        command: 'npx ts-node server.ts',
+        type: 'node',
       };
 
       const runner = new NodeRunner('app', config);
@@ -71,13 +70,12 @@ describe('Node Runner', () => {
 
       expect(runner.status).toBe('running');
       expect(execa).toHaveBeenCalledWith(
-        'ts-node',
-        ['-e', 'console.log("TypeScript")'],
+        'bash',
+        ['-c', 'npx ts-node server.ts'],
         expect.objectContaining({
           cwd: process.cwd(),
           reject: false,
           all: true,
-          shell: true,
         })
       );
     });
@@ -93,7 +91,7 @@ describe('Node Runner', () => {
 
       const config: ProcessConfig = {
         category: 'backend',
-        command: 'console.log("Hello")',
+        command: 'npm start',
         type: 'node',
         cwd: '/custom/path',
       };
@@ -102,8 +100,8 @@ describe('Node Runner', () => {
       await runner.start();
 
       expect(execa).toHaveBeenCalledWith(
-        'node',
-        ['-e', 'console.log("Hello")'],
+        'bash',
+        ['-c', 'npm start'],
         expect.objectContaining({
           cwd: '/custom/path',
         })

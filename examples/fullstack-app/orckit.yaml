@@ -38,7 +38,7 @@ processes:
   # Backend layer (depends on infrastructure)
   api-server:
     category: backend
-    type: node
+    type: bash
     command: "pnpm run dev"
     cwd: "./api"
     dependencies: [postgres, redis]
@@ -70,7 +70,7 @@ processes:
 
   worker-queue:
     category: backend
-    type: node
+    type: bash
     command: "pnpm run worker"
     cwd: "./worker"
     dependencies: [postgres, redis, api-server]

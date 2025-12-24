@@ -21,16 +21,13 @@ export class NodeRunner extends ProcessRunner {
     const cwd = this.config.cwd ?? process.cwd();
     const env = getProcessEnv(this.config.env);
 
-    // Use node or ts-node based on type
-    const runtime = this.config.type === 'ts-node' ? 'ts-node' : 'node';
-
-    // Execute command
-    this.process = execa(runtime, ['-e', this.config.command], {
+    // Execute command as shell command
+    // Note: Node type is for Node.js projects, not for running JS code with -e
+    this.process = execa('bash', ['-c', this.config.command], {
       cwd,
       env,
       reject: false,
       all: true,
-      shell: true,
     });
 
     this._pid = this.process.pid ?? null;
