@@ -223,12 +223,44 @@ export class ProcessManager extends EventEmitter {
         debug.info(`Waiting for ${name} to become ready...`, { type: config.ready.type });
 
         try {
-          await waitForReady(healthChecker, config.ready, (attempt, result) => {
-            debug.debug(`Health check attempt ${attempt} for ${name}`, {
-              success: result.success,
-              message: result.message,
-            });
+          // Create a promise that rejects if the process exits/fails during health check
+          let processExitReject: ((error: Error) => void) | null = null;
+          const processExitPromise = new Promise<never>((_, reject) => {
+            processExitReject = reject;
           });
+
+          // Listen for process exit during health check
+          const exitHandler = (code: number | null) => {
+            if (processExitReject) {
+              processExitReject(new Error(`Process exited with code ${code} during health check`));
+            }
+          };
+          const failHandler = () => {
+            if (processExitReject) {
+              processExitReject(new Error('Process failed during health check'));
+            }
+          };
+
+          runner.on('exit', exitHandler);
+          runner.on('failed', failHandler);
+
+          try {
+            // Race between health check and process exit
+            await Promise.race([
+              waitForReady(healthChecker, config.ready, (attempt, result) => {
+                debug.debug(`Health check attempt ${attempt} for ${name}`, {
+                  success: result.success,
+                  message: result.message,
+                });
+              }),
+              processExitPromise,
+            ]);
+          } finally {
+            // Clean up listeners
+            runner.off('exit', exitHandler);
+            runner.off('failed', failHandler);
+            processExitReject = null;
+          }
 
           debug.info(`Process ${name} is ready`);
 
@@ -243,7 +275,7 @@ export class ProcessManager extends EventEmitter {
             error: error instanceof Error ? error.message : error,
           });
 
-          // Mark as failed if health check times out
+          // Mark as failed if health check times out or process exits
           if (this.statusMonitor) {
             this.statusMonitor.updateProcessStatus(name, 'failed');
           }
@@ -253,8 +285,11 @@ export class ProcessManager extends EventEmitter {
             error: error instanceof Error ? error : new Error(String(error)),
           });
 
-          // Stop the process since it failed health check
-          await this.stop(name);
+          // Stop the process since it failed health check (if still running)
+          const currentRunner = this.runners.get(name);
+          if (currentRunner && currentRunner.status !== 'stopped' && currentRunner.status !== 'failed') {
+            await this.stop(name);
+          }
           throw error;
         }
       } else {

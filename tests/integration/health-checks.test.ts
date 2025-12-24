@@ -278,6 +278,46 @@ describe('Health Check Integration', () => {
     });
   });
 
+  describe('process exit during health check', () => {
+    it('should fail fast if process crashes during health check', async () => {
+      const config: OrckitConfig = {
+        version: '1',
+        project: 'test-crash',
+        processes: {
+          crasher: {
+            category: 'test',
+            type: 'bash',
+            // Process starts then crashes immediately
+            command: 'echo "Starting..." && exit 1',
+            ready: {
+              type: 'http',
+              url: 'http://localhost:19999/', // This will never respond
+              timeout: 60000, // Long timeout - but should fail fast due to crash
+            },
+          },
+        },
+      };
+
+      orckit = new Orckit({
+        config,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
+
+      const events: string[] = [];
+      orckit.on('process:failed', (e) => events.push(`failed:${e.processName}`));
+
+      const startTime = Date.now();
+      await expect(orckit.start()).rejects.toThrow(/Process (exited|failed)/);
+      const duration = Date.now() - startTime;
+
+      expect(events).toContain('failed:crasher');
+      // Should fail within a few seconds, not 60 seconds
+      expect(duration).toBeLessThan(5000);
+    });
+  });
+
   describe('exit-code ready check', () => {
     it('should mark process as ready when it exits with code 0', async () => {
       const config: OrckitConfig = {
