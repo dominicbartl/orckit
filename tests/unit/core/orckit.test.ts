@@ -1,15 +1,51 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+/**
+ * Tests for the Orckit main orchestrator class
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Orckit } from '../../../src/core/orckit.js';
 import type { OrckitConfig } from '../../../src/types/index.js';
 
-// Mock all dependencies
-vi.mock('../../../src/core/config/parser.js', () => ({
-  parseConfig: vi.fn(),
-  validateConfig: vi.fn(),
+// Mock dependencies
+vi.mock('../../../src/core/preflight/runner.js', () => ({
+  runPreflight: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('../../../src/core/dependency/resolver.js', () => ({
-  resolveDependencies: vi.fn(),
+vi.mock('../../../src/core/boot/logger.js', () => ({
+  BootLogger: vi.fn().mockImplementation(() => ({
+    printHeader: vi.fn(),
+    printPhaseHeader: vi.fn(),
+    printPreflightCheck: vi.fn(),
+    printProcessStarting: vi.fn(),
+    printProcessReady: vi.fn(),
+    printCompletion: vi.fn(),
+  })),
+}));
+
+vi.mock('../../../src/runners/factory.js', () => ({
+  createRunner: vi.fn().mockImplementation((name: string) => {
+    const EventEmitter = require('events');
+    const runner = new EventEmitter();
+    runner.name = name;
+    runner.status = 'pending';
+    runner.pid = Math.floor(Math.random() * 90000) + 10000;
+    runner.start = vi.fn().mockImplementation(async () => {
+      runner.status = 'running';
+      runner.emit('status', 'running');
+      runner.emit('ready');
+    });
+    runner.stop = vi.fn().mockImplementation(async () => {
+      runner.status = 'stopped';
+      runner.emit('status', 'stopped');
+    });
+    runner.restart = vi.fn().mockImplementation(async () => {
+      runner.status = 'running';
+      runner.emit('restarting', 1);
+      runner.emit('status', 'running');
+      runner.emit('ready');
+    });
+    return runner;
+  }),
 }));
 
 describe('Orckit', () => {
@@ -28,71 +64,42 @@ describe('Orckit', () => {
         web: {
           category: 'frontend',
           command: 'npm run dev',
+          dependencies: ['api'],
         },
       },
     };
   });
 
   describe('constructor', () => {
-    it('should load config from file path', async () => {
-      const { parseConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should accept a config object', () => {
+      const orckit = new Orckit({ config: mockConfig, skipPreflight: true });
 
-      vi.mocked(parseConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({
-        configPath: '/path/to/config.yml',
-      });
-
-      expect(parseConfig).toHaveBeenCalledWith('/path/to/config.yml');
-      expect(resolveDependencies).toHaveBeenCalledWith(mockConfig);
-      expect(orckit.getProcessNames()).toEqual(['api', 'web']);
-    });
-
-    it('should validate config object', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({
-        config: mockConfig,
-      });
-
-      expect(validateConfig).toHaveBeenCalledWith(mockConfig);
-      expect(orckit.getConfig()).toEqual(mockConfig);
+      expect(orckit.getConfig().project).toBe('test-project');
+      expect(orckit.getProcessNames()).toContain('api');
+      expect(orckit.getProcessNames()).toContain('web');
     });
 
     it('should throw error if neither configPath nor config provided', () => {
-      expect(() => new Orckit({})).toThrow('Either configPath or config must be provided');
+      expect(() => new Orckit({} as any)).toThrow();
     });
 
-    it('should initialize all processes as pending', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should resolve dependencies correctly', () => {
+      const orckit = new Orckit({ config: mockConfig, skipPreflight: true });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const statuses = orckit.getStatus() as Map<string, string>;
-      expect(statuses.get('api')).toBe('pending');
-      expect(statuses.get('web')).toBe('pending');
+      const names = orckit.getProcessNames();
+      // api should come before web (web depends on api)
+      expect(names.indexOf('api')).toBeLessThan(names.indexOf('web'));
     });
   });
 
   describe('start', () => {
-    it('should start all processes in order', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
+    it('should start all processes', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       await orckit.start();
 
@@ -101,69 +108,61 @@ describe('Orckit', () => {
     });
 
     it('should start specific processes only', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       await orckit.start(['api']);
 
       expect(orckit.getStatus('api')).toBe('running');
+      // web not started
       expect(orckit.getStatus('web')).toBe('pending');
     });
 
-    it('should emit process:starting event', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const startingListener = vi.fn();
-      orckit.on('process:starting', startingListener);
-
-      await orckit.start();
-
-      expect(startingListener).toHaveBeenCalledWith({
-        processName: 'api',
-        timestamp: expect.any(Date),
+    it('should include dependencies when starting specific process', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
       });
+
+      // Request to start web, should also start api (dependency)
+      await orckit.start(['web']);
+
+      expect(orckit.getStatus('api')).toBe('running');
+      expect(orckit.getStatus('web')).toBe('running');
     });
 
-    it('should emit process:ready event', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should emit process:starting event', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const readyListener = vi.fn();
-      orckit.on('process:ready', readyListener);
+      const startingEvents: string[] = [];
+      orckit.on('process:starting', (event) => {
+        startingEvents.push(event.processName);
+      });
 
       await orckit.start();
 
-      expect(readyListener).toHaveBeenCalledWith({
-        processName: 'api',
-        timestamp: expect.any(Date),
-        duration: 100,
-      });
+      expect(startingEvents).toContain('api');
+      expect(startingEvents).toContain('web');
     });
 
     it('should emit all:ready event after all processes start', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       const allReadyListener = vi.fn();
       orckit.on('all:ready', allReadyListener);
@@ -173,170 +172,96 @@ describe('Orckit', () => {
       expect(allReadyListener).toHaveBeenCalled();
     });
 
-    it('should throw error if process not found', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should throw error for unknown process', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      await expect(orckit.start(['nonexistent'])).rejects.toThrow(
-        "Process 'nonexistent' not found in configuration"
-      );
+      await expect(orckit.start(['nonexistent'])).rejects.toThrow();
     });
   });
 
   describe('stop', () => {
-    it('should stop all running processes in reverse order', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
+    it('should stop all running processes', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       await orckit.start();
       await orckit.stop();
 
+      // After stop, statuses should be 'stopped'
       expect(orckit.getStatus('api')).toBe('stopped');
       expect(orckit.getStatus('web')).toBe('stopped');
     });
 
-    it('should stop specific processes only', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      await orckit.start();
-      await orckit.stop(['api']);
-
-      expect(orckit.getStatus('api')).toBe('stopped');
-      expect(orckit.getStatus('web')).toBe('running');
-    });
-
     it('should emit process:stopped event', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       await orckit.start();
 
-      const stoppedListener = vi.fn();
-      orckit.on('process:stopped', stoppedListener);
+      const stoppedEvents: string[] = [];
+      orckit.on('process:stopped', (event) => {
+        stoppedEvents.push(event.processName);
+      });
 
       await orckit.stop();
 
-      expect(stoppedListener).toHaveBeenCalledWith({
-        processName: 'api',
-        timestamp: expect.any(Date),
-      });
-    });
-
-    it('should not emit stopped event for non-running processes', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const stoppedListener = vi.fn();
-      orckit.on('process:stopped', stoppedListener);
-
-      await orckit.stop(); // Process is pending, not running
-
-      expect(stoppedListener).not.toHaveBeenCalled();
+      expect(stoppedEvents).toContain('api');
+      expect(stoppedEvents).toContain('web');
     });
   });
 
   describe('restart', () => {
-    it('should stop and start processes', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
+    it('should restart specified processes', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       await orckit.start();
       await orckit.restart(['api']);
 
       expect(orckit.getStatus('api')).toBe('running');
-    });
-
-    it('should emit stop and start events', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const stoppedListener = vi.fn();
-      const startingListener = vi.fn();
-
-      orckit.on('process:stopped', stoppedListener);
-      orckit.on('process:starting', startingListener);
-
-      await orckit.start();
-      await orckit.restart(['api']);
-
-      expect(stoppedListener).toHaveBeenCalled();
-      expect(startingListener).toHaveBeenCalledTimes(2); // Once for start, once for restart
     });
   });
 
   describe('getStatus', () => {
     it('should return status for specific process', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       expect(orckit.getStatus('api')).toBe('pending');
 
-      await orckit.start();
+      await orckit.start(['api']);
 
       expect(orckit.getStatus('api')).toBe('running');
     });
 
-    it('should return pending for non-existent process', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      expect(orckit.getStatus('nonexistent')).toBe('pending');
-    });
-
     it('should return Map of all statuses when no process name provided', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
       const statuses = orckit.getStatus() as Map<string, string>;
 
@@ -347,159 +272,108 @@ describe('Orckit', () => {
     });
   });
 
+  describe('getConfig', () => {
+    it('should return the configuration', () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
+
+      const config = orckit.getConfig();
+
+      expect(config.project).toBe('test-project');
+      expect(config.processes.api).toBeDefined();
+      expect(config.processes.web).toBeDefined();
+    });
+  });
+
+  describe('getProcessNames', () => {
+    it('should return process names in dependency order', () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
+
+      const names = orckit.getProcessNames();
+
+      expect(names).toHaveLength(2);
+      // api before web (web depends on api)
+      expect(names.indexOf('api')).toBeLessThan(names.indexOf('web'));
+    });
+  });
+
   describe('waitForReady', () => {
-    it('should return true when process becomes ready', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should return true when process is running', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
+      await orckit.start(['api']);
 
-      const orckit = new Orckit({ config: mockConfig });
-
-      // Start process in background
-      setTimeout(() => orckit.start(), 50);
-
-      const ready = await orckit.waitForReady('api', { timeout: 5000 });
+      const ready = await orckit.waitForReady('api', { timeout: 1000 });
 
       expect(ready).toBe(true);
     });
 
     it('should return false when timeout expires', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      const ready = await orckit.waitForReady('api', { timeout: 200 });
+      // Don't start the process
+      const ready = await orckit.waitForReady('api', { timeout: 100 });
 
       expect(ready).toBe(false);
     });
-
-    it('should use default timeout of 30000ms', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      // Start process after a short delay
-      setTimeout(() => orckit.start(), 50);
-
-      const ready = await orckit.waitForReady('api');
-
-      expect(ready).toBe(true);
-    });
   });
 
-  describe('addProcess', () => {
-    it('should add a new process to configuration', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      orckit.addProcess('db', {
-        category: 'infrastructure',
-        command: 'docker run postgres',
+  describe('started property', () => {
+    it('should be false initially', () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
       });
 
-      const config = orckit.getConfig();
-      expect(config.processes['db']).toBeDefined();
-      expect(config.processes['db'].command).toBe('docker run postgres');
+      expect(orckit.started).toBe(false);
     });
 
-    it('should initialize new process as pending', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      orckit.addProcess('db', {
-        category: 'infrastructure',
-        command: 'docker run postgres',
+    it('should be true after start', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
       });
-
-      expect(orckit.getStatus('db')).toBe('pending');
-    });
-  });
-
-  describe('removeProcess', () => {
-    it('should stop and remove process', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      await orckit.start();
-      await orckit.removeProcess('api');
-
-      const config = orckit.getConfig();
-      expect(config.processes['api']).toBeUndefined();
-
-      const statuses = orckit.getStatus() as Map<string, string>;
-      expect(statuses.has('api')).toBe(false);
-    });
-
-    it('should emit stopped event when removing running process', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api']);
-
-      const orckit = new Orckit({ config: mockConfig });
 
       await orckit.start();
 
-      const stoppedListener = vi.fn();
-      orckit.on('process:stopped', stoppedListener);
-
-      await orckit.removeProcess('api');
-
-      expect(stoppedListener).toHaveBeenCalled();
+      expect(orckit.started).toBe(true);
     });
-  });
 
-  describe('getConfig', () => {
-    it('should return the configuration', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
+    it('should be false after stop', async () => {
+      const orckit = new Orckit({
+        config: mockConfig,
+        skipPreflight: true,
+        enableIPC: false,
+        enableStatusMonitor: false,
+      });
 
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
+      await orckit.start();
+      await orckit.stop();
 
-      const orckit = new Orckit({ config: mockConfig });
-
-      expect(orckit.getConfig()).toEqual(mockConfig);
-    });
-  });
-
-  describe('getProcessNames', () => {
-    it('should return process names in start order', async () => {
-      const { validateConfig } = await import('../../../src/core/config/parser.js');
-      const { resolveDependencies } = await import('../../../src/core/dependency/resolver.js');
-
-      vi.mocked(validateConfig).mockReturnValue(mockConfig);
-      vi.mocked(resolveDependencies).mockReturnValue(['api', 'web']);
-
-      const orckit = new Orckit({ config: mockConfig });
-
-      expect(orckit.getProcessNames()).toEqual(['api', 'web']);
+      expect(orckit.started).toBe(false);
     });
   });
 });

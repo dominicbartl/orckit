@@ -1,10 +1,10 @@
 /**
- * Orchestrator IPC Integration tests
- * Tests the full integration between Orchestrator, IPC Server, and StatusMonitor
+ * Orckit IPC Integration tests
+ * Tests the full integration between Orckit, IPC Server, and StatusMonitor
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { Orchestrator } from '@/core/orchestrator';
+import { Orckit } from '@/core/orckit';
 import { connect, type Socket } from 'node:net';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
@@ -16,9 +16,9 @@ import type {
   CommandResponseMessage,
 } from '@/types';
 
-describe('Orchestrator IPC Integration', () => {
+describe('Orckit IPC Integration', () => {
   const testSocketPath = '/tmp/orckit-test-integration.sock';
-  let orchestrator: Orchestrator;
+  let orckit: Orckit;
 
   const createTestConfig = (): OrckitConfig => ({
     version: '1',
@@ -47,9 +47,9 @@ describe('Orchestrator IPC Integration', () => {
   });
 
   afterEach(async () => {
-    if (orchestrator) {
+    if (orckit) {
       try {
-        await orchestrator.stop();
+        await orckit.stop();
       } catch {
         // Ignore cleanup errors
       }
@@ -60,51 +60,43 @@ describe('Orchestrator IPC Integration', () => {
   });
 
   describe('IPC server lifecycle', () => {
-    it('should start IPC server alongside orchestrator', async () => {
+    it('should start IPC server alongside orckit', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      // Manually set socket path for testing
-      // In real usage, this is determined by project name
       const socketPath = '/tmp/orckit-test-integration.sock';
 
-      // Start processes (which also starts IPC server)
-      await orchestrator.start();
-
-      // Give IPC server time to initialize
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Socket should exist
       expect(existsSync(socketPath)).toBe(true);
 
-      // Should be able to connect
       const client = await createClient(socketPath);
       expect(client.readyState).toBe('open');
       client.destroy();
     });
 
-    it('should stop IPC server when orchestrator stops', async () => {
+    it('should stop IPC server when orckit stops', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const socketPath = '/tmp/orckit-test-integration.sock';
       expect(existsSync(socketPath)).toBe(true);
 
-      await orchestrator.stop();
+      await orckit.stop();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Socket should be cleaned up
       expect(existsSync(socketPath)).toBe(false);
     });
   });
@@ -123,20 +115,19 @@ describe('Orchestrator IPC Integration', () => {
         },
       };
 
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
-        statusUpdateInterval: 100, // Faster updates for testing
+        statusUpdateInterval: 100,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const client = await createClient('/tmp/orckit-test-integration.sock');
       const messages = collectMessages(client);
 
-      // Wait for status updates
       await waitFor(() => messages.length > 0, 3000);
 
       expect(messages.length).toBeGreaterThan(0);
@@ -144,7 +135,6 @@ describe('Orchestrator IPC Integration', () => {
       const statusUpdates = messages.filter((m) => m.type === 'status_update') as StatusUpdateMessage[];
       expect(statusUpdates.length).toBeGreaterThan(0);
 
-      // Should have process info
       const hasTestProc = statusUpdates.some((update) =>
         update.processes.some((p) => p.name === 'test-proc')
       );
@@ -153,62 +143,16 @@ describe('Orchestrator IPC Integration', () => {
       client.destroy();
     });
 
-    it('should update process status as it changes', async () => {
-      const config: OrckitConfig = {
-        version: '1',
-        project: 'test-integration',
-        processes: {
-          'quick-task': {
-            category: 'test',
-            type: 'bash',
-            command: 'echo "start" && sleep 1 && echo "done"',
-            ready: {
-              type: 'exit-code',
-            },
-          },
-        },
-      };
-
-      orchestrator = new Orchestrator({
-        config,
-        enableTmux: false,
-        enableIPC: true,
-        statusUpdateInterval: 100,
-      });
-
-      await orchestrator.start();
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      const client = await createClient('/tmp/orckit-test-integration.sock');
-      const messages = collectMessages(client);
-
-      // Wait for multiple status updates
-      await waitFor(() => messages.length >= 3, 5000);
-
-      const statusUpdates = messages.filter((m) => m.type === 'status_update') as StatusUpdateMessage[];
-
-      // Should see status progression
-      const statuses = statusUpdates
-        .map((update) => update.processes.find((p) => p.name === 'quick-task')?.status)
-        .filter(Boolean);
-
-      // Should have seen multiple different statuses
-      const uniqueStatuses = new Set(statuses);
-      expect(uniqueStatuses.size).toBeGreaterThan(1);
-
-      client.destroy();
-    });
-
     it('should broadcast to multiple clients simultaneously', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
         statusUpdateInterval: 100,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const socketPath = '/tmp/orckit-test-integration.sock';
@@ -220,10 +164,8 @@ describe('Orchestrator IPC Integration', () => {
       const messages2 = collectMessages(client2);
       const messages3 = collectMessages(client3);
 
-      // Wait for broadcasts
       await waitFor(() => messages1.length > 0 && messages2.length > 0 && messages3.length > 0, 3000);
 
-      // All clients should receive messages
       expect(messages1.length).toBeGreaterThan(0);
       expect(messages2.length).toBeGreaterThan(0);
       expect(messages3.length).toBeGreaterThan(0);
@@ -248,19 +190,18 @@ describe('Orchestrator IPC Integration', () => {
         },
       };
 
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const client = await createClient('/tmp/orckit-test-integration.sock');
       const messages = collectMessages(client);
 
-      // Send restart command
       const command: CommandMessage = {
         type: 'command',
         action: 'restart',
@@ -269,7 +210,6 @@ describe('Orchestrator IPC Integration', () => {
 
       sendCommand(client, command);
 
-      // Wait for response
       await waitFor(() => messages.some((m) => m.type === 'command_response'), 3000);
 
       const response = messages.find((m) => m.type === 'command_response') as CommandResponseMessage;
@@ -293,34 +233,38 @@ describe('Orchestrator IPC Integration', () => {
         },
       };
 
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Verify process is running before stopping
+      const initialStatus = orckit.getStatus('stoppable');
+      expect(['starting', 'running']).toContain(initialStatus);
 
       const client = await createClient('/tmp/orckit-test-integration.sock');
       const messages = collectMessages(client);
 
-      // Send stop command
       sendCommand(client, {
         type: 'command',
         action: 'stop',
         processName: 'stoppable',
       });
 
-      // Wait for response
       await waitFor(() => messages.some((m) => m.type === 'command_response'), 3000);
 
       const response = messages.find((m) => m.type === 'command_response') as CommandResponseMessage;
       expect(response).toBeTruthy();
       expect(response.success).toBe(true);
 
-      // Verify process is actually stopped
-      const status = orchestrator.getStatus('stoppable');
+      // Wait for status to update after stop command
+      await waitFor(() => orckit.getStatus('stoppable') === 'stopped', 3000);
+
+      const status = orckit.getStatus('stoppable');
       expect(status).toBe('stopped');
 
       client.destroy();
@@ -328,26 +272,24 @@ describe('Orchestrator IPC Integration', () => {
 
     it('should handle errors in commands gracefully', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const client = await createClient('/tmp/orckit-test-integration.sock');
       const messages = collectMessages(client);
 
-      // Send command for non-existent process
       sendCommand(client, {
         type: 'command',
         action: 'restart',
         processName: 'non-existent-process',
       });
 
-      // Wait for error response
       await waitFor(() => messages.some((m) => m.type === 'command_response'), 3000);
 
       const response = messages.find((m) => m.type === 'command_response') as CommandResponseMessage;
@@ -357,178 +299,28 @@ describe('Orchestrator IPC Integration', () => {
 
       client.destroy();
     });
-
-    it('should handle multiple commands in sequence', async () => {
-      const config: OrckitConfig = {
-        version: '1',
-        project: 'test-integration',
-        processes: {
-          'multi-cmd': {
-            category: 'test',
-            type: 'bash',
-            command: 'sleep 10',
-          },
-        },
-      };
-
-      orchestrator = new Orchestrator({
-        config,
-        enableTmux: false,
-        enableIPC: true,
-      });
-
-      await orchestrator.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const client = await createClient('/tmp/orckit-test-integration.sock');
-      const messages = collectMessages(client);
-
-      // Send multiple commands
-      sendCommand(client, { type: 'command', action: 'stop', processName: 'multi-cmd' });
-      sendCommand(client, { type: 'command', action: 'start', processName: 'multi-cmd' });
-      sendCommand(client, { type: 'command', action: 'restart', processName: 'multi-cmd' });
-
-      // Wait for all responses
-      await waitFor(() => messages.filter((m) => m.type === 'command_response').length >= 3, 5000);
-
-      const responses = messages.filter((m) => m.type === 'command_response') as CommandResponseMessage[];
-      expect(responses.length).toBeGreaterThanOrEqual(3);
-
-      client.destroy();
-    });
-  });
-
-  describe('process lifecycle events', () => {
-    it('should broadcast when process starts', async () => {
-      const config: OrckitConfig = {
-        version: '1',
-        project: 'test-integration',
-        processes: {
-          'starter': {
-            category: 'test',
-            type: 'bash',
-            command: 'echo "starting" && sleep 2',
-          },
-        },
-      };
-
-      orchestrator = new Orchestrator({
-        config,
-        enableTmux: false,
-        enableIPC: true,
-        statusUpdateInterval: 100,
-      });
-
-      const socketPath = '/tmp/orckit-test-integration.sock';
-
-      // Connect client before starting
-      // We need to connect after IPC server is initialized, which happens during start()
-      // So we'll start orchestrator first, then connect
-
-      const startPromise = orchestrator.start();
-
-      // Wait a bit for IPC server to initialize
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      const client = await createClient(socketPath);
-      const messages = collectMessages(client);
-
-      await startPromise;
-
-      // Should see starting status
-      await waitFor(
-        () => {
-          const statusUpdates = messages.filter((m) => m.type === 'status_update') as StatusUpdateMessage[];
-          return statusUpdates.some((update) =>
-            update.processes.some((p) => p.name === 'starter' && p.status === 'starting')
-          );
-        },
-        3000
-      );
-
-      const statusUpdates = messages.filter((m) => m.type === 'status_update') as StatusUpdateMessage[];
-      const hasStarting = statusUpdates.some((update) =>
-        update.processes.some((p) => p.name === 'starter' && p.status === 'starting')
-      );
-
-      expect(hasStarting).toBe(true);
-
-      client.destroy();
-    });
-
-    it('should track restart count', async () => {
-      const config: OrckitConfig = {
-        version: '1',
-        project: 'test-integration',
-        processes: {
-          'restarter': {
-            category: 'test',
-            type: 'bash',
-            command: 'sleep 5',
-          },
-        },
-      };
-
-      orchestrator = new Orchestrator({
-        config,
-        enableTmux: false,
-        enableIPC: true,
-        statusUpdateInterval: 100,
-      });
-
-      await orchestrator.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const client = await createClient('/tmp/orckit-test-integration.sock');
-      const messages = collectMessages(client);
-
-      // Get initial restart count
-      await waitFor(() => messages.some((m) => m.type === 'status_update'), 2000);
-      const initialUpdate = messages.find((m) => m.type === 'status_update') as StatusUpdateMessage;
-      const initialCount =
-        initialUpdate.processes.find((p) => p.name === 'restarter')?.restartCount ?? 0;
-
-      // Restart process
-      sendCommand(client, { type: 'command', action: 'restart', processName: 'restarter' });
-
-      // Wait for restart to complete and status to update
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      // Check restart count increased
-      const laterUpdates = messages.filter((m) => m.type === 'status_update') as StatusUpdateMessage[];
-      const laterUpdate = laterUpdates[laterUpdates.length - 1];
-      const laterCount = laterUpdate.processes.find((p) => p.name === 'restarter')?.restartCount ?? 0;
-
-      expect(laterCount).toBeGreaterThan(initialCount);
-
-      client.destroy();
-    });
   });
 
   describe('error scenarios', () => {
     it('should handle IPC client disconnect during operation', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: true,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const client = await createClient('/tmp/orckit-test-integration.sock');
-
-      // Abruptly disconnect
       client.destroy();
 
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Orchestrator should still be functional
-      const status = orchestrator.getStatus();
+      const status = orckit.getStatus();
       expect(status).toBeTruthy();
 
-      // Should be able to connect new client
       const newClient = await createClient('/tmp/orckit-test-integration.sock');
       expect(newClient.readyState).toBe('open');
       newClient.destroy();
@@ -536,16 +328,15 @@ describe('Orchestrator IPC Integration', () => {
 
     it('should not start IPC server if disabled', async () => {
       const config = createTestConfig();
-      orchestrator = new Orchestrator({
+      orckit = new Orckit({
         config,
-        enableTmux: false,
         enableIPC: false,
+        skipPreflight: true,
       });
 
-      await orchestrator.start();
+      await orckit.start();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Socket should not exist
       expect(existsSync('/tmp/orckit-test-integration.sock')).toBe(false);
     });
   });

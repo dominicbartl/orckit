@@ -22,43 +22,6 @@ export class DockerRunner extends ProcessRunner {
 
     const cwd = this.config.cwd ?? process.cwd();
     const env = getProcessEnv(this.config.env);
-
-    // If tmux is available, run in tmux pane
-    if (this.tmuxManager) {
-      await this.startInTmux(cwd, env);
-    } else {
-      await this.startDirectly(cwd, env);
-    }
-  }
-
-  /**
-   * Start process in tmux pane
-   */
-  private async startInTmux(cwd: string, _env: NodeJS.ProcessEnv): Promise<void> {
-    const category = this.config.category ?? 'default';
-
-    // Build command with only custom environment variables from config
-    let command = this.config.command;
-    const customEnv = this.config.env ?? {};
-    if (Object.keys(customEnv).length > 0) {
-      const envVars = Object.entries(customEnv)
-        .map(([key, value]) => `export ${key}="${value}"`)
-        .join(' && ');
-      command = `${envVars} && ${command}`;
-    }
-
-    // Create tmux pane and run command
-    this.paneId = await this.tmuxManager!.createProcessPane(category, this.name, command, cwd);
-
-    // Mark as running
-    this.updateStatus('running');
-    this.emit('ready');
-  }
-
-  /**
-   * Start process directly (without tmux)
-   */
-  private async startDirectly(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     // Execute Docker command
     this.process = execa('bash', ['-c', this.config.command], {
       cwd,
@@ -105,15 +68,6 @@ export class DockerRunner extends ProcessRunner {
   }
 
   async stop(): Promise<void> {
-    // If running in tmux, send Ctrl+C to pane
-    if (this.paneId && this.tmuxManager) {
-      await this.tmuxManager.sendKeys(this.paneId, 'C-c');
-      this.paneId = null;
-      this.updateStatus('stopped');
-      return;
-    }
-
-    // Direct execution cleanup
     if (!this.process) {
       return;
     }

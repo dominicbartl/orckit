@@ -1,19 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { runPreflight } from '../../../../src/core/preflight/runner.js';
 import type { OrckitConfig } from '../../../../src/types/index.js';
 
-// Mock system utilities
+// Mock system utilities - use relative path matching the source imports
 vi.mock('../../../../src/utils/system.js', () => ({
   isDockerRunning: vi.fn(),
-  isTmuxAvailable: vi.fn(),
   getNodeVersion: vi.fn(),
-  isPortAvailable: vi.fn(),
+}));
+
+// Mock port utilities
+vi.mock('../../../../src/utils/port.js', () => ({
+  checkPorts: vi.fn().mockResolvedValue([]),
+  extractPorts: vi.fn().mockReturnValue([]),
+  formatPortConflictMessage: vi.fn().mockReturnValue(''),
+}));
+
+// Mock config parser - use the path as seen from the checks.ts module
+vi.mock('../../../../src/core/config/parser.js', () => ({
+  extractPorts: vi.fn().mockReturnValue([]),
+  hasDockerProcesses: vi.fn().mockReturnValue(false),
+}));
+
+// Mock interactive handlers
+vi.mock('../../../../src/core/preflight/interactive.js', () => ({
+  handlePortConflicts: vi.fn().mockResolvedValue(true),
+  handleDockerNotRunning: vi.fn().mockResolvedValue(true),
 }));
 
 // Mock execa
 vi.mock('execa', () => ({
   execa: vi.fn(),
 }));
+
+// Import after mocks are set up (hoisting handles this)
+import { runPreflight } from '../../../../src/core/preflight/runner.js';
 
 describe('Preflight Runner', () => {
   beforeEach(() => {
@@ -22,10 +41,9 @@ describe('Preflight Runner', () => {
 
   describe('runPreflight', () => {
     it('should run all built-in checks by default', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
 
       const config: OrckitConfig = {
         processes: {
@@ -35,21 +53,20 @@ describe('Preflight Runner', () => {
 
       const results = await runPreflight(config);
 
-      // Should include tmux and node_version checks (docker skipped)
+      // Should include node_version and port_availability checks (docker skipped)
       const checkNames = results.map((r) => r.name);
-      expect(checkNames).toContain('tmux');
       expect(checkNames).toContain('node_version');
+      expect(checkNames).toContain('port_availability');
       expect(checkNames).not.toContain('docker_daemon'); // Conditional check skipped
     });
 
     it('should include docker check when config has docker processes', async () => {
-      const { isTmuxAvailable, getNodeVersion, isDockerRunning } = await import(
-        '../../../../src/utils/system.js'
-      );
+      const { getNodeVersion, isDockerRunning } = await import('../../../../src/utils/system.js');
+      const { hasDockerProcesses } = await import('../../../../src/core/config/parser.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
       vi.mocked(isDockerRunning).mockResolvedValue(true);
+      vi.mocked(hasDockerProcesses).mockReturnValue(true);
 
       const config: OrckitConfig = {
         processes: {
@@ -64,13 +81,13 @@ describe('Preflight Runner', () => {
     });
 
     it('should run port availability checks', async () => {
-      const { isTmuxAvailable, getNodeVersion, isPortAvailable } = await import(
-        '../../../../src/utils/system.js'
-      );
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { extractPorts } = await import('../../../../src/core/config/parser.js');
+      const { checkPorts } = await import('../../../../src/utils/port.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
-      vi.mocked(isPortAvailable).mockResolvedValue(true);
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
+      vi.mocked(extractPorts).mockReturnValue([3000]);
+      vi.mocked(checkPorts).mockResolvedValue([]);
 
       const config: OrckitConfig = {
         processes: {
@@ -87,15 +104,14 @@ describe('Preflight Runner', () => {
       const portCheck = results.find((r) => r.name === 'port_availability');
       expect(portCheck).toBeDefined();
       expect(portCheck?.passed).toBe(true);
-      expect(isPortAvailable).toHaveBeenCalledWith(3000);
+      expect(checkPorts).toHaveBeenCalledWith([3000]);
     });
 
     it('should include custom checks from config', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
       const { execa } = await import('execa');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
       vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
       const config: OrckitConfig = {
@@ -122,12 +138,9 @@ describe('Preflight Runner', () => {
     });
 
     it('should measure check duration', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve('20.0.0'), 50))
-      );
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
 
       const config: OrckitConfig = {
         processes: {
@@ -143,30 +156,9 @@ describe('Preflight Runner', () => {
     });
 
     it('should handle check failures', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(false);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
-
-      const config: OrckitConfig = {
-        processes: {
-          api: { category: 'backend', command: 'npm start' },
-        },
-      };
-
-      const results = await runPreflight(config);
-
-      const tmuxCheck = results.find((r) => r.name === 'tmux');
-      expect(tmuxCheck?.passed).toBe(false);
-      expect(tmuxCheck?.error).toContain('tmux');
-      expect(tmuxCheck?.fixSuggestion).toBeDefined();
-    });
-
-    it('should handle check exceptions', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
-
-      vi.mocked(isTmuxAvailable).mockRejectedValue(new Error('System error'));
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 16, minor: 0, patch: 0 }); // Old version
 
       const config: OrckitConfig = {
         processes: {
@@ -176,18 +168,23 @@ describe('Preflight Runner', () => {
 
       const results = await runPreflight(config);
 
-      const tmuxCheck = results.find((r) => r.name === 'tmux');
-      expect(tmuxCheck?.passed).toBe(false);
-      expect(tmuxCheck?.error).toBeDefined();
+      const nodeCheck = results.find((r) => r.name === 'node_version');
+      expect(nodeCheck?.passed).toBe(false);
+      expect(nodeCheck?.error).toBeDefined();
+      expect(nodeCheck?.fixSuggestion).toBeDefined();
     });
 
     it('should skip conditional checks that do not apply', async () => {
-      const { isTmuxAvailable, getNodeVersion, isDockerRunning } = await import(
-        '../../../../src/utils/system.js'
-      );
+      // Reset modules to ensure mocks are applied fresh
+      vi.resetModules();
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      // Re-import with mocks applied
+      const { getNodeVersion, isDockerRunning } = await import('../../../../src/utils/system.js');
+      const { hasDockerProcesses } = await import('../../../../src/core/config/parser.js');
+      const { runPreflight: runPreflightFresh } = await import('../../../../src/core/preflight/runner.js');
+
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
+      vi.mocked(hasDockerProcesses).mockReturnValue(false);
 
       const config: OrckitConfig = {
         processes: {
@@ -195,7 +192,7 @@ describe('Preflight Runner', () => {
         },
       };
 
-      const results = await runPreflight(config);
+      const results = await runPreflightFresh(config);
 
       // Docker check should not run because no docker processes in config
       const dockerCheck = results.find((r) => r.name === 'docker_daemon');
@@ -204,11 +201,10 @@ describe('Preflight Runner', () => {
     });
 
     it('should handle multiple custom checks', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
       const { execa } = await import('execa');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
       vi.mocked(execa)
         .mockResolvedValueOnce({ exitCode: 0 } as any)
         .mockResolvedValueOnce({ exitCode: 0 } as any);
@@ -241,13 +237,13 @@ describe('Preflight Runner', () => {
     });
 
     it('should handle port check with multiple ports', async () => {
-      const { isTmuxAvailable, getNodeVersion, isPortAvailable } = await import(
-        '../../../../src/utils/system.js'
-      );
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { extractPorts } = await import('../../../../src/core/config/parser.js');
+      const { checkPorts } = await import('../../../../src/utils/port.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
-      vi.mocked(isPortAvailable).mockResolvedValue(true);
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
+      vi.mocked(extractPorts).mockReturnValue([3000, 8080]);
+      vi.mocked(checkPorts).mockResolvedValue([]);
 
       const config: OrckitConfig = {
         processes: {
@@ -268,21 +264,19 @@ describe('Preflight Runner', () => {
 
       const portCheck = results.find((r) => r.name === 'port_availability');
       expect(portCheck).toBeDefined();
-      expect(isPortAvailable).toHaveBeenCalledWith(3000);
-      expect(isPortAvailable).toHaveBeenCalledWith(8080);
+      expect(checkPorts).toHaveBeenCalledWith([3000, 8080]);
     });
 
     it('should return all check results in order', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
       const { execa } = await import('execa');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
       vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
       const config: OrckitConfig = {
         processes: {
-          api: { category: 'backend', command: 'npm start', port: 3000 },
+          api: { category: 'backend', command: 'npm start' },
         },
         preflight: {
           checks: [
@@ -307,10 +301,9 @@ describe('Preflight Runner', () => {
     });
 
     it('should include error and fix suggestion for failed checks', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(false);
-      vi.mocked(getNodeVersion).mockResolvedValue('16.0.0'); // Old Node version
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 16, minor: 0, patch: 0 }); // Old Node version
 
       const config: OrckitConfig = {
         processes: {
@@ -330,10 +323,9 @@ describe('Preflight Runner', () => {
     });
 
     it('should handle empty config', async () => {
-      const { isTmuxAvailable, getNodeVersion } = await import('../../../../src/utils/system.js');
+      const { getNodeVersion } = await import('../../../../src/utils/system.js');
 
-      vi.mocked(isTmuxAvailable).mockResolvedValue(true);
-      vi.mocked(getNodeVersion).mockResolvedValue('20.0.0');
+      vi.mocked(getNodeVersion).mockReturnValue({ major: 20, minor: 0, patch: 0 });
 
       const config: OrckitConfig = {
         processes: {},
@@ -344,8 +336,8 @@ describe('Preflight Runner', () => {
       // Should still run built-in checks
       expect(results.length).toBeGreaterThan(0);
       const checkNames = results.map((r) => r.name);
-      expect(checkNames).toContain('tmux');
       expect(checkNames).toContain('node_version');
+      expect(checkNames).toContain('port_availability');
     });
   });
 });

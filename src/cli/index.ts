@@ -10,7 +10,7 @@ import { Orckit } from '../core/orckit.js';
 import { parseConfig } from '../core/config/parser.js';
 import { resolveDependencies, visualizeDependencyGraph } from '../core/dependency/resolver.js';
 import { initializeDebugLogging, debugConfig, LogLevel } from '../utils/logger.js';
-import { launchOverview } from './overview.js';
+import { launchInkTUI } from './ink-tui.js';
 
 const program = new Command();
 
@@ -58,7 +58,8 @@ program
   .command('start [processes...]')
   .description('Start all processes or specific processes')
   .option('-c, --config <path>', 'Path to configuration file', './orckit.yaml')
-  .action(async (processes: string[], options: { config: string }) => {
+  .option('--headless', 'Run without UI (background mode)', false)
+  .action(async (processes: string[], options: { config: string; headless: boolean }) => {
     try {
       console.log(chalk.cyan('🎭 Orckit - Starting processes...\n'));
 
@@ -79,25 +80,32 @@ program
 
       await orckit.start(processes.length > 0 ? processes : undefined);
 
-      // Check if we're in an interactive terminal
-      const isInteractive = process.stdout.isTTY && process.stdin.isTTY;
+      // Check if we should launch TUI
+      const isInteractive = process.stdout.isTTY && process.stdin.isTTY && !options.headless;
 
       if (isInteractive) {
-        // Show tmux keybinding help
-        console.log(chalk.cyan('\n📺 Attaching to tmux session...\n'));
-        console.log(chalk.gray('Tmux keybindings:'));
-        console.log(chalk.gray('  Ctrl+b w       - Show window list'));
-        console.log(chalk.gray('  Ctrl+b 0-9     - Switch to window number'));
-        console.log(chalk.gray('  Ctrl+b n/p     - Next/Previous window'));
-        console.log(chalk.gray('  Ctrl+b d       - Detach from session'));
-        console.log(chalk.gray('  Ctrl+b ?       - Show all keybindings\n'));
+        // Launch Ink TUI
+        console.log(chalk.cyan('\n📺 Launching interactive TUI...\n'));
+        console.log(chalk.gray('TUI keybindings:'));
+        console.log(chalk.gray('  Tab            - Switch windows'));
+        console.log(chalk.gray('  Ctrl+1-9       - Jump to window'));
+        console.log(chalk.gray('  r              - Restart process'));
+        console.log(chalk.gray('  s              - Stop process'));
+        console.log(chalk.gray('  q              - Quit\n'));
 
-        // Attach to tmux session to show overview
-        await orckit.attach();
+        try {
+          await launchInkTUI({
+            socketPath: `/tmp/orckit-${orckit.getConfig().project ?? 'orckit'}.sock`,
+            config: orckit.getConfig(),
+          });
+        } catch (error) {
+          console.error(chalk.red('Failed to launch TUI:'), error);
+          console.log(chalk.yellow('Falling back to headless mode...'));
+        }
       } else {
         // Running in background - keep process alive
-        console.log(chalk.green('\n✓  Orckit is running in background'));
-        console.log(chalk.cyan('  Attach to tmux session: tmux attach -t <session-name>'));
+        console.log(chalk.green('\n✓  Orckit is running in headless mode'));
+        console.log(chalk.cyan('  Launch TUI: orc overview'));
         console.log(chalk.cyan('  View overview: orc overview\n'));
 
         // Keep process alive
@@ -259,19 +267,7 @@ program
   });
 
 /**
- * Attach command (placeholder)
- */
-program
-  .command('attach <process>')
-  .description('Attach to a process tmux pane')
-  .option('-c, --config <path>', 'Path to configuration file', './orckit.yaml')
-  .action((process: string, _options: { config: string }) => {
-    console.log(chalk.yellow(`Attaching to ${process} (not yet implemented)`));
-    // TODO: Implement tmux attach
-  });
-
-/**
- * Overview command - Real-time process monitoring
+ * Overview command - Real-time process monitoring with Ink TUI
  */
 program
   .command('overview')
@@ -281,13 +277,19 @@ program
   .action(async (options: { config?: string; socket?: string }) => {
     try {
       let socketPath: string;
+      let config;
 
       if (options.socket) {
         // Socket path provided directly
         socketPath = options.socket;
+
+        // Try to load config if provided
+        if (options.config) {
+          config = parseConfig(options.config);
+        }
       } else if (options.config) {
         // Parse config to get project name
-        const config = parseConfig(options.config);
+        config = parseConfig(options.config);
         const projectName = config.project ?? 'orckit';
         socketPath = `/tmp/orckit-${projectName}.sock`;
       } else {
@@ -307,7 +309,18 @@ program
         }
       }
 
-      await launchOverview({ socketPath });
+      // Launch Ink TUI
+      if (!config) {
+        // Try to load default config
+        try {
+          config = parseConfig('./orckit.yaml');
+        } catch {
+          // No config available - use minimal config
+          config = { version: '1', project: 'orckit', processes: {} };
+        }
+      }
+
+      await launchInkTUI({ socketPath, config });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
       process.exit(1);

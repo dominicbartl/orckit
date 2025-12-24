@@ -4,9 +4,17 @@
  * Main export file for programmatic API
  */
 
-// Core API
+// Core API - Orckit is the main orchestrator class
 export { Orckit } from './core/orckit.js';
-export { Orchestrator } from './core/orchestrator.js';
+export type { OrckitOptions, OrckitEvents } from './core/orckit.js';
+
+// Managers - for advanced use cases and testing
+export { ConfigManager } from './core/config/manager.js';
+export type { ConfigManagerOptions, DependencyInfo } from './core/config/manager.js';
+
+export { ProcessManager } from './core/process/manager.js';
+export type { ProcessManagerOptions, ProcessManagerEvents } from './core/process/manager.js';
+
 
 // Status monitoring
 export { StatusMonitor, formatStatusSnapshot, formatCompactStatus } from './core/status/index.js';

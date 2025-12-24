@@ -5,13 +5,13 @@
 import { execa } from 'execa';
 import {
   isDockerRunning,
-  isTmuxAvailable,
   getNodeVersion,
 } from '../../utils/system.js';
 import type { OrckitConfig, PreflightCheckResult } from '../../types/index.js';
 import { extractPorts, hasDockerProcesses } from '../config/parser.js';
-import { checkPorts, formatPortConflictMessage } from '../../utils/port.js';
+import { checkPorts, formatPortConflictMessage, type PortCheckResult } from '../../utils/port.js';
 import { createDebugLogger } from '../../utils/logger.js';
+import { handlePortConflicts, handleDockerNotRunning } from './interactive.js';
 
 const debug = createDebugLogger('PreflightChecks');
 
@@ -24,6 +24,8 @@ export interface PreflightCheck {
   errorMessage: string;
   fixSuggestion?: string;
   conditional?: (config: OrckitConfig) => boolean;
+  /** Interactive resolution function - returns true if resolved, false to abort */
+  interactive?: () => Promise<boolean>;
 }
 
 /**
@@ -31,17 +33,12 @@ export interface PreflightCheck {
  */
 export const BUILTIN_CHECKS: PreflightCheck[] = [
   {
-    name: 'tmux',
-    check: async () => await isTmuxAvailable(),
-    errorMessage: 'tmux is not installed',
-    fixSuggestion: 'Install with: brew install tmux (macOS) or apt-get install tmux (Linux)',
-  },
-  {
     name: 'docker_daemon',
     check: async () => await isDockerRunning(),
     errorMessage: 'Docker daemon is not running',
     fixSuggestion: 'Start Docker Desktop or run: sudo systemctl start docker',
     conditional: (config) => hasDockerProcesses(config),
+    interactive: async () => await handleDockerNotRunning(),
   },
   {
     name: 'node_version',
@@ -59,6 +56,7 @@ export const BUILTIN_CHECKS: PreflightCheck[] = [
  */
 export function createPortCheck(config: OrckitConfig): PreflightCheck {
   let conflictDetails: string | undefined;
+  let conflicts: PortCheckResult[] = [];
 
   return {
     name: 'port_availability',
@@ -72,7 +70,7 @@ export function createPortCheck(config: OrckitConfig): PreflightCheck {
 
       debug.info('Checking port availability', { ports });
 
-      const conflicts = await checkPorts(ports);
+      conflicts = await checkPorts(ports);
 
       if (conflicts.length === 0) {
         debug.info('All ports are available', { ports });
@@ -105,6 +103,13 @@ export function createPortCheck(config: OrckitConfig): PreflightCheck {
     },
     fixSuggestion:
       'Stop the conflicting processes or update your configuration to use different ports',
+    interactive: async () => {
+      // Handle port conflicts interactively
+      if (conflicts.length === 0) {
+        return true;
+      }
+      return await handlePortConflicts(conflicts);
+    },
   };
 }
 

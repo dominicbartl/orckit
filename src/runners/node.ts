@@ -24,50 +24,6 @@ export class NodeRunner extends ProcessRunner {
     // Use node or ts-node based on type
     const runtime = this.config.type === 'ts-node' ? 'ts-node' : 'node';
 
-    // If tmux is available, run in tmux pane
-    if (this.tmuxManager) {
-      await this.startInTmux(runtime, cwd, env);
-    } else {
-      await this.startDirectly(runtime, cwd, env);
-    }
-  }
-
-  /**
-   * Start process in tmux pane
-   */
-  private async startInTmux(
-    runtime: string,
-    cwd: string,
-    _env: NodeJS.ProcessEnv
-  ): Promise<void> {
-    const category = this.config.category ?? 'default';
-
-    // Build command with only custom environment variables from config
-    let command = `${runtime} -e "${this.config.command.replace(/"/g, '\\"')}"`;
-    const customEnv = this.config.env ?? {};
-    if (Object.keys(customEnv).length > 0) {
-      const envVars = Object.entries(customEnv)
-        .map(([key, value]) => `export ${key}="${value}"`)
-        .join(' && ');
-      command = `${envVars} && ${command}`;
-    }
-
-    // Create tmux pane and run command
-    this.paneId = await this.tmuxManager!.createProcessPane(category, this.name, command, cwd);
-
-    // Mark as running
-    this.updateStatus('running');
-    this.emit('ready');
-  }
-
-  /**
-   * Start process directly (without tmux)
-   */
-  private async startDirectly(
-    runtime: string,
-    cwd: string,
-    env: NodeJS.ProcessEnv
-  ): Promise<void> {
     // Execute command
     this.process = execa(runtime, ['-e', this.config.command], {
       cwd,
@@ -110,15 +66,6 @@ export class NodeRunner extends ProcessRunner {
   }
 
   async stop(): Promise<void> {
-    // If running in tmux, send Ctrl+C to pane
-    if (this.paneId && this.tmuxManager) {
-      await this.tmuxManager.sendKeys(this.paneId, 'C-c');
-      this.paneId = null;
-      this.updateStatus('stopped');
-      return;
-    }
-
-    // Direct execution cleanup
     if (!this.process || !this.process.pid) {
       return;
     }

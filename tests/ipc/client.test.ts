@@ -181,22 +181,24 @@ describe('IPC Client Connections', () => {
 
       server.broadcastLog('test-process', 'stdout', 'Application started');
       server.broadcastLog('test-process', 'stderr', 'Warning: deprecated API');
+      server.flush(); // Force flush the batch
 
-      await waitFor(() => messages.length >= 2, 1000);
+      await waitFor(() => messages.length >= 1, 1000);
 
-      expect(messages.length).toBeGreaterThanOrEqual(2);
+      // Logs are batched, so we get a single log_batch message
+      expect(messages.length).toBe(1);
 
-      const log1 = messages[0] as LogMessage;
-      const log2 = messages[1] as LogMessage;
+      const batch = messages[0] as any;
+      expect(batch.type).toBe('log_batch');
+      expect(batch.logs.length).toBe(2);
 
-      expect(log1.type).toBe('log');
-      expect(log1.processName).toBe('test-process');
-      expect(log1.level).toBe('stdout');
-      expect(log1.content).toBe('Application started');
+      expect(batch.logs[0].processName).toBe('test-process');
+      expect(batch.logs[0].level).toBe('stdout');
+      expect(batch.logs[0].content).toBe('Application started');
 
-      expect(log2.type).toBe('log');
-      expect(log2.level).toBe('stderr');
-      expect(log2.content).toBe('Warning: deprecated API');
+      expect(batch.logs[1].processName).toBe('test-process');
+      expect(batch.logs[1].level).toBe('stderr');
+      expect(batch.logs[1].content).toBe('Warning: deprecated API');
 
       client.destroy();
     });
@@ -207,11 +209,13 @@ describe('IPC Client Connections', () => {
 
       const multiLineLog = 'Line 1\nLine 2\nLine 3';
       server.broadcastLog('test', 'stdout', multiLineLog);
+      server.flush(); // Force flush the batch
 
       await waitFor(() => messages.length > 0, 1000);
 
-      const log = messages[0] as LogMessage;
-      expect(log.content).toBe(multiLineLog);
+      const batch = messages[0] as any;
+      expect(batch.type).toBe('log_batch');
+      expect(batch.logs[0].content).toBe(multiLineLog);
 
       client.destroy();
     });
@@ -351,15 +355,17 @@ describe('IPC Client Connections', () => {
 
       server.broadcastStatus([{ name: 'p1', status: 'starting', category: 'test', restartCount: 0 }]);
       server.broadcastLog('p1', 'stdout', 'Starting...');
+      server.flush(); // Flush after first log
       server.broadcastStatus([{ name: 'p1', status: 'running', category: 'test', restartCount: 0 }]);
       server.broadcastLog('p1', 'stdout', 'Ready!');
+      server.flush(); // Flush after second log
 
       await waitFor(() => messages.length >= 4, 1000);
 
       expect(messages[0].type).toBe('status_update');
-      expect(messages[1].type).toBe('log');
+      expect(messages[1].type).toBe('log_batch');
       expect(messages[2].type).toBe('status_update');
-      expect(messages[3].type).toBe('log');
+      expect(messages[3].type).toBe('log_batch');
 
       client.destroy();
     });
@@ -379,13 +385,14 @@ describe('IPC Client Connections', () => {
       server.broadcastStatus([{ name: 'p1', status: 'running', category: 'test', restartCount: 0 }]);
       sendCommand(client, { type: 'command', action: 'restart', processName: 'p1' });
       server.broadcastLog('p1', 'stdout', 'Restarting...');
+      server.flush(); // Flush logs
       server.broadcastStatus([{ name: 'p1', status: 'starting', category: 'test', restartCount: 1 }]);
 
       await waitFor(() => messages.length >= 4 && commands.length >= 1, 1000);
 
       expect(commands.length).toBeGreaterThanOrEqual(1);
       expect(messages.some((m) => m.type === 'status_update')).toBe(true);
-      expect(messages.some((m) => m.type === 'log')).toBe(true);
+      expect(messages.some((m) => m.type === 'log_batch')).toBe(true);
       expect(messages.some((m) => m.type === 'command_response')).toBe(true);
 
       client.destroy();
@@ -425,17 +432,22 @@ describe('IPC Client Connections', () => {
       const client = await createClient(testSocketPath);
       const messages = collectMessages(client);
 
-      // Send multiple messages at once
+      // Send multiple messages at once (they get batched)
       server.broadcastLog('p1', 'stdout', 'Message 1');
       server.broadcastLog('p2', 'stdout', 'Message 2');
       server.broadcastLog('p3', 'stdout', 'Message 3');
+      server.flush(); // Flush the batch
 
-      await waitFor(() => messages.length >= 3, 1000);
+      await waitFor(() => messages.length >= 1, 1000);
 
-      expect(messages.length).toBeGreaterThanOrEqual(3);
-      expect((messages[0] as LogMessage).content).toBe('Message 1');
-      expect((messages[1] as LogMessage).content).toBe('Message 2');
-      expect((messages[2] as LogMessage).content).toBe('Message 3');
+      // All logs are batched into a single message
+      expect(messages.length).toBe(1);
+      const batch = messages[0] as any;
+      expect(batch.type).toBe('log_batch');
+      expect(batch.logs.length).toBe(3);
+      expect(batch.logs[0].content).toBe('Message 1');
+      expect(batch.logs[1].content).toBe('Message 2');
+      expect(batch.logs[2].content).toBe('Message 3');
 
       client.destroy();
     });
@@ -446,12 +458,14 @@ describe('IPC Client Connections', () => {
 
       const largeContent = 'x'.repeat(10000);
       server.broadcastLog('test', 'stdout', largeContent);
+      server.flush(); // Force flush
 
       await waitFor(() => messages.length > 0, 1000);
 
-      const msg = messages[0] as LogMessage;
-      expect(msg.content).toBe(largeContent);
-      expect(msg.content.length).toBe(10000);
+      const batch = messages[0] as any;
+      expect(batch.type).toBe('log_batch');
+      expect(batch.logs[0].content).toBe(largeContent);
+      expect(batch.logs[0].content.length).toBe(10000);
 
       client.destroy();
     });

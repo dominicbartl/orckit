@@ -41,41 +41,6 @@ export class AngularRunner extends ProcessRunner {
       command += ' --progress=false';
     }
 
-    // If tmux is available, run in tmux pane
-    if (this.tmuxManager) {
-      await this.startInTmux(command, cwd, env);
-    } else {
-      await this.startDirectly(command, cwd, env);
-    }
-  }
-
-  /**
-   * Start process in tmux pane
-   */
-  private async startInTmux(command: string, cwd: string, _env: NodeJS.ProcessEnv): Promise<void> {
-    const category = this.config.category ?? 'default';
-
-    // Build command with only custom environment variables from config
-    const customEnv = this.config.env ?? {};
-    if (Object.keys(customEnv).length > 0) {
-      const envVars = Object.entries(customEnv)
-        .map(([key, value]) => `export ${key}="${value}"`)
-        .join(' && ');
-      command = `${envVars} && ${command}`;
-    }
-
-    // Create tmux pane and run command
-    this.paneId = await this.tmuxManager!.createProcessPane(category, this.name, command, cwd);
-
-    // Mark as running (in tmux mode, we can't parse output)
-    this.updateStatus('building');
-    this.emit('ready');
-  }
-
-  /**
-   * Start process directly (without tmux)
-   */
-  private async startDirectly(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     // Execute Angular CLI command
     this.process = execa('bash', ['-c', command], {
       cwd,
@@ -202,16 +167,26 @@ export class AngularRunner extends ProcessRunner {
     }
   }
 
-  async stop(): Promise<void> {
-    // If running in tmux, send Ctrl+C to pane
-    if (this.paneId && this.tmuxManager) {
-      await this.tmuxManager.sendKeys(this.paneId, 'C-c');
-      this.paneId = null;
-      this.updateStatus('stopped');
-      return;
+  /**
+   * Process output line (for external output feeding, e.g., from tmux)
+   */
+  processOutputLine(line: string, isStderr: boolean = false): void {
+    // Emit as stdout/stderr so listeners can capture it
+    if (isStderr) {
+      this.emit('stderr', line);
+    } else {
+      this.emit('stdout', line);
     }
 
-    // Direct execution cleanup
+    // Parse the output for build information
+    if (this.config.integration?.mode === 'deep') {
+      this.parseAngularJSON(line);
+    } else {
+      this.parseAngularText(line);
+    }
+  }
+
+  async stop(): Promise<void> {
     if (!this.process || !this.process.pid) {
       return;
     }

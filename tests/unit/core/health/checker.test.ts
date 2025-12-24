@@ -417,7 +417,7 @@ describe('Health Checker', () => {
         interval: 100,
       };
 
-      const promise = waitForReady(checker, config);
+  const promise = waitForReady(checker, config);
 
       // Advance through retries
       for (let i = 0; i < 3; i++) {

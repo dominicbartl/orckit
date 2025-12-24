@@ -1,113 +1,194 @@
 /**
- * Main Orckit orchestrator class - Programmatic API
+ * Orckit - Main Orchestrator Class
+ *
+ * This is the primary API for orchestrating processes.
+ * It composes focused managers for different responsibilities:
+ *
+ * - ConfigManager: Configuration loading, validation, dependency resolution
+ * - ProcessManager: Runner lifecycle (start/stop/restart)
+ * - StatusMonitor: Real-time status and resource tracking
+ * - OutputBufferManager: Process output buffering
+ * - IPCServer: Inter-process communication for TUI
+ * - BootLogger: Boot sequence display
+ *
+ * Each manager is independently testable.
  */
 
-import { EventEmitter } from 'events';
-import type { OrckitConfig, ProcessConfig, ProcessStatus } from '../types/index.js';
-import { parseConfig, validateConfig } from './config/parser.js';
-import { resolveDependencies } from './dependency/resolver.js';
-import { Orchestrator } from './orchestrator.js';
+import { EventEmitter } from 'node:events';
+import type {
+  OrckitConfig,
+  ProcessStatus,
+  IPCProcessInfo,
+  CommandMessage,
+  BufferRequestMessage,
+} from '../types/index.js';
+import { ConfigManager, type ConfigManagerOptions } from './config/manager.js';
+import { ProcessManager } from './process/manager.js';
+import { StatusMonitor, type StatusSnapshot } from './status/monitor.js';
+import { OutputBufferManager } from './output/buffer-manager.js';
+import { IPCServer } from './ipc/server.js';
+import { BootLogger } from './boot/logger.js';
+import { runPreflight } from './preflight/runner.js';
 import { createDebugLogger } from '../utils/logger.js';
+import type { Socket } from 'node:net';
 
 const debug = createDebugLogger('Orckit');
 
 /**
- * Main Orckit orchestrator - Simplified API wrapper around the full Orchestrator
+ * Options for creating an Orckit instance
+ */
+export interface OrckitOptions extends ConfigManagerOptions {
+  /**
+   * Enable status monitoring (default: true)
+   */
+  enableStatusMonitor?: boolean;
+
+  /**
+   * Status update interval in milliseconds (default: 1000)
+   */
+  statusUpdateInterval?: number;
+
+  /**
+   * Enable IPC server for TUI communication (default: true)
+   */
+  enableIPC?: boolean;
+
+  /**
+   * Default buffer size for process output (default: 10000)
+   */
+  bufferSize?: number;
+
+  /**
+   * Skip preflight checks (default: false)
+   */
+  skipPreflight?: boolean;
+}
+
+/**
+ * Orckit Events
+ */
+export interface OrckitEvents {
+  'process:starting': { processName: string; timestamp: Date };
+  'process:ready': { processName: string; timestamp: Date };
+  'process:status': { processName: string; status: ProcessStatus };
+  'process:failed': { processName: string; error: Error };
+  'process:stopped': { processName: string; timestamp: Date };
+  'process:restarting': { processName: string; restartCount: number };
+  'status:update': StatusSnapshot;
+  'all:ready': void;
+}
+
+/**
+ * Main Orckit Orchestrator
+ *
+ * @example
+ * ```ts
+ * // Create from config file
+ * const orckit = new Orckit({ configPath: './orckit.yaml' });
+ *
+ * // Start all processes
+ * await orckit.start();
+ *
+ * // Or start specific processes
+ * await orckit.start(['api', 'frontend']);
+ *
+ * // Get status
+ * const status = orckit.getStatus('api');
+ *
+ * // Stop all
+ * await orckit.stop();
+ * ```
  */
 export class Orckit extends EventEmitter {
-  private config: OrckitConfig;
-  private processes: Map<string, ProcessStatus> = new Map();
-  private startOrder: string[] = [];
-  private orchestrator: Orchestrator;
+  // Managers
+  private readonly configManager: ConfigManager;
+  private readonly processManager: ProcessManager;
+  private readonly statusMonitor: StatusMonitor | null;
+  private readonly bufferManager: OutputBufferManager;
+  private readonly bootLogger: BootLogger;
+  private ipcServer: IPCServer | null = null;
 
-  constructor(options: { configPath?: string; config?: OrckitConfig }) {
+  // Options
+  private readonly options: Required<
+    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight'>
+  >;
+
+  // State
+  private isStarted = false;
+
+  constructor(options: OrckitOptions) {
     super();
 
     debug.debug('Initializing Orckit', { options });
 
-    if (options.configPath) {
-      debug.debug('Loading config from path', { path: options.configPath });
-      this.config = parseConfig(options.configPath);
-    } else if (options.config) {
-      debug.debug('Validating provided config');
-      this.config = validateConfig(options.config);
-    } else {
-      throw new Error('Either configPath or config must be provided');
-    }
+    // Store options with defaults
+    this.options = {
+      enableStatusMonitor: options.enableStatusMonitor ?? true,
+      enableIPC: options.enableIPC ?? true,
+      skipPreflight: options.skipPreflight ?? false,
+    };
 
-    // Resolve dependencies
-    this.startOrder = resolveDependencies(this.config);
-    debug.info('Dependencies resolved', { startOrder: this.startOrder });
-
-    // Initialize process statuses
-    for (const name of this.startOrder) {
-      this.processes.set(name, 'pending');
-    }
-
-    // Create the orchestrator
-    debug.debug('Creating orchestrator');
-    this.orchestrator = new Orchestrator({
-      config: this.config,
-      enableStatusMonitor: true,
-      enableTmux: true,
+    // Initialize ConfigManager (handles config loading and dependency resolution)
+    this.configManager = new ConfigManager({
+      configPath: options.configPath,
+      config: options.config,
     });
 
-    // Forward orchestrator events
-    this.setupEventForwarding();
+    debug.info('Config loaded', {
+      project: this.configManager.getProjectName(),
+      processCount: this.configManager.getProcessNames().length,
+      startOrder: this.configManager.getStartOrder(),
+    });
 
-    debug.info('Orckit initialized successfully');
-  }
+    // Initialize OutputBufferManager
+    this.bufferManager = new OutputBufferManager({
+      defaultBufferSize: options.bufferSize ?? 10000,
+    });
 
-  /**
-   * Setup event forwarding from orchestrator to Orckit
-   */
-  private setupEventForwarding(): void {
-    debug.debug('Setting up event forwarding');
+    // Initialize StatusMonitor if enabled
+    if (this.options.enableStatusMonitor) {
+      this.statusMonitor = new StatusMonitor({
+        updateInterval: options.statusUpdateInterval ?? 1000,
+        trackResources: true,
+        trackBuildMetrics: true,
+      });
+
+      // Forward status snapshots
+      this.statusMonitor.on('snapshot', (snapshot: StatusSnapshot) => {
+        this.emit('status:update', snapshot);
+
+        // Broadcast to IPC clients
+        if (this.ipcServer) {
+          const processes = this.convertSnapshotToIPCProcesses(snapshot);
+          this.ipcServer.broadcastStatus(processes);
+        }
+      });
+    } else {
+      this.statusMonitor = null;
+    }
+
+    // Initialize ProcessManager
+    this.processManager = new ProcessManager({
+      statusMonitor: this.statusMonitor ?? undefined,
+      bufferManager: this.bufferManager,
+    });
+
+    // Register all processes (so getStatus works before start)
+    for (const name of this.configManager.getProcessNames()) {
+      const config = this.configManager.getProcessConfig(name);
+      if (config) {
+        this.processManager.register(name, config);
+      }
+    }
 
     // Forward process events
-    this.orchestrator.on('process:starting', (event) => {
-      debug.debug('Process starting', event);
-      const name = event.processName;
-      this.processes.set(name, 'starting');
-      this.emit('process:starting', event);
-    });
+    this.setupProcessManagerEvents();
 
-    this.orchestrator.on('process:ready', (event) => {
-      debug.info('Process ready', event);
-      const name = event.processName;
-      this.processes.set(name, 'running');
-      this.emit('process:ready', event);
-    });
+    // Initialize BootLogger
+    const bootStyle = this.configManager.getBootConfig()?.style ?? 'timeline';
+    this.bootLogger = new BootLogger(bootStyle);
 
-    this.orchestrator.on('process:status', (event) => {
-      debug.debug('Process status changed', event);
-      const name = event.processName;
-      this.processes.set(name, event.status);
-      this.emit('process:status', event);
-    });
-
-    this.orchestrator.on('process:failed', (event) => {
-      debug.error('Process failed', event);
-      const name = event.processName;
-      this.processes.set(name, 'failed');
-      this.emit('process:failed', event);
-    });
-
-    this.orchestrator.on('process:restarting', (event) => {
-      debug.warn('Process restarting', event);
-      this.emit('process:restarting', event);
-    });
-
-    this.orchestrator.on('all:ready', () => {
-      debug.info('All processes ready');
-      this.emit('all:ready');
-    });
-
-    this.orchestrator.on('status:update', (snapshot) => {
-      this.emit('status:update', snapshot);
-    });
-
-    debug.debug('Event forwarding setup complete');
+    debug.info('Orckit initialized successfully');
   }
 
   /**
@@ -115,95 +196,152 @@ export class Orckit extends EventEmitter {
    */
   async start(processNames?: string[]): Promise<void> {
     const startTimer = debug.time('Orckit start');
-    debug.info('Starting processes', {
-      requested: processNames,
-      all: this.startOrder,
+
+    // Get filtered start order (includes dependencies)
+    const toStart = this.configManager.filterStartOrder(processNames);
+
+    debug.info('Starting orchestration', {
+      requested: processNames ?? 'all',
+      actual: toStart,
     });
 
-    try {
-      await this.orchestrator.start(processNames);
-      startTimer();
-      debug.info('All processes started successfully');
-    } catch (error) {
-      startTimer();
-      debug.error('Failed to start processes', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error;
+    // Print header
+    this.bootLogger.printHeader(this.configManager.getProjectName());
+
+    // Run preflight checks
+    if (!this.options.skipPreflight) {
+      debug.debug('Running preflight checks');
+      this.bootLogger.printPhaseHeader('Preflight Checks');
+
+      const preflightResults = await runPreflight(this.configManager.getConfig());
+
+      for (const result of preflightResults) {
+        this.bootLogger.printPreflightCheck(result);
+        debug.debug('Preflight check result', result);
+      }
+
+      const failed = preflightResults.filter((r) => !r.passed);
+      if (failed.length > 0) {
+        debug.error('Preflight checks failed', { failed });
+        throw new Error(
+          `Preflight checks failed: ${failed.map((r) => r.name).join(', ')}`
+        );
+      }
+
+      debug.info('Preflight checks passed');
     }
+
+    // Start IPC server if enabled
+    if (this.options.enableIPC) {
+      await this.initializeIPC();
+    }
+
+    // Start status monitor
+    if (this.statusMonitor) {
+      debug.debug('Starting status monitor');
+      this.statusMonitor.start();
+    }
+
+    // Start processes wave by wave
+    this.bootLogger.printPhaseHeader('Starting Processes');
+
+    const waves = this.configManager.filterWaves(processNames);
+    debug.info('Starting waves', {
+      waveCount: waves.length,
+      waves: waves.map((w, i) => ({ wave: i + 1, processes: w })),
+    });
+
+    for (let i = 0; i < waves.length; i++) {
+      const wave = waves[i];
+      const waveProcesses = wave.filter((name) => toStart.includes(name));
+
+      if (waveProcesses.length === 0) {
+        continue;
+      }
+
+      debug.info(`Starting wave ${i + 1}/${waves.length}`, { processes: waveProcesses });
+
+      // Start all processes in this wave in parallel
+      await Promise.all(
+        waveProcesses.map((name) => this.startProcess(name))
+      );
+
+      debug.info(`Wave ${i + 1} completed`);
+    }
+
+    this.bootLogger.printCompletion(toStart.length);
+    this.isStarted = true;
+    this.emit('all:ready');
+
+    startTimer();
+    debug.info('Orchestration started successfully');
   }
 
   /**
-   * Stop processes
+   * Stop all processes or specific processes
    */
   async stop(processNames?: string[]): Promise<void> {
     const stopTimer = debug.time('Orckit stop');
-    debug.info('Stopping processes', {
-      requested: processNames,
-      all: this.startOrder,
-    });
 
-    try {
-      await this.orchestrator.stop(processNames);
+    const toStop = processNames ?? [...this.configManager.getStartOrder()].reverse();
 
-      // Update local status tracking
-      const toStop = processNames ?? this.startOrder;
-      for (const name of toStop) {
-        if (this.processes.has(name)) {
-          this.processes.set(name, 'stopped');
-          this.emit('process:stopped', { processName: name, timestamp: new Date() });
-        }
-      }
+    debug.info('Stopping processes', { processes: toStop });
 
-      stopTimer();
-      debug.info('Processes stopped successfully');
-    } catch (error) {
-      stopTimer();
-      debug.error('Failed to stop processes', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error;
+    for (const name of toStop) {
+      await this.processManager.stop(name);
     }
+
+    // Stop status monitor
+    if (this.statusMonitor) {
+      this.statusMonitor.stop();
+    }
+
+    // Stop IPC server
+    if (this.ipcServer) {
+      await this.ipcServer.stop();
+      this.ipcServer = null;
+    }
+
+    // Cleanup buffers
+    this.bufferManager.cleanup();
+
+    this.isStarted = false;
+    stopTimer();
+    debug.info('Processes stopped');
   }
 
   /**
-   * Restart processes
+   * Restart specific processes
    */
   async restart(processNames: string[]): Promise<void> {
-    const restartTimer = debug.time('Orckit restart');
     debug.info('Restarting processes', { processes: processNames });
 
-    try {
-      await this.orchestrator.restart(processNames);
-      restartTimer();
-      debug.info('Processes restarted successfully');
-    } catch (error) {
-      restartTimer();
-      debug.error('Failed to restart processes', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error;
+    for (const name of processNames) {
+      await this.processManager.restart(name);
     }
+
+    debug.info('Processes restarted');
   }
 
   /**
-   * Get status of all processes or a specific process
+   * Get status of a specific process or all processes
    */
   getStatus(processName?: string): ProcessStatus | Map<string, ProcessStatus> {
     if (processName) {
-      const status = this.orchestrator.getStatus(processName);
-      debug.debug('Getting status for process', { processName, status });
-      return status;
+      return this.processManager.getStatus(processName);
     }
-
-    const allStatus = this.orchestrator.getStatus();
-    const count = allStatus instanceof Map ? allStatus.size : 0;
-    debug.debug('Getting status for all processes', { count });
-    return allStatus;
+    return this.processManager.getAllStatuses();
   }
 
   /**
-   * Wait for a process to be ready
+   * Get current status snapshot (for detailed monitoring)
+   */
+  getStatusSnapshot(): StatusSnapshot | undefined {
+    return this.statusMonitor?.getSnapshot();
+  }
+
+  /**
+   * Wait for a process to become ready
    */
   async waitForReady(processName: string, options?: { timeout?: number }): Promise<boolean> {
     const timeout = options?.timeout ?? 30000;
@@ -212,7 +350,7 @@ export class Orckit extends EventEmitter {
     debug.debug('Waiting for process to be ready', { processName, timeout });
 
     while (Date.now() - startTime < timeout) {
-      const status = this.orchestrator.getStatus(processName);
+      const status = this.processManager.getStatus(processName);
       if (status === 'running') {
         debug.info('Process is ready', {
           processName,
@@ -224,80 +362,239 @@ export class Orckit extends EventEmitter {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    debug.warn('Process ready timeout', {
-      processName,
-      timeout,
-      finalStatus: this.orchestrator.getStatus(processName),
-    });
+    debug.warn('Process ready timeout', { processName, timeout });
     return false;
-  }
-
-  /**
-   * Add a process dynamically
-   */
-  addProcess(name: string, config: ProcessConfig): void {
-    debug.debug('Adding process dynamically', { name, config });
-    this.config.processes[name] = config;
-    this.processes.set(name, 'pending');
-    // Note: This won't automatically add it to the orchestrator's dependency graph
-    // A full restart would be needed to incorporate it
-    debug.warn('Dynamic process addition requires restart to incorporate into dependency graph');
-  }
-
-  /**
-   * Remove a process
-   */
-  async removeProcess(name: string): Promise<void> {
-    debug.info('Removing process', { name });
-
-    try {
-      await this.stop([name]);
-      delete this.config.processes[name];
-      this.processes.delete(name);
-      debug.info('Process removed successfully', { name });
-    } catch (error) {
-      debug.error('Failed to remove process', {
-        name,
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error;
-    }
   }
 
   /**
    * Get the configuration
    */
   getConfig(): OrckitConfig {
-    return this.config;
+    return this.configManager.getConfig();
   }
 
   /**
-   * Get process names
+   * Get process names in start order
    */
   getProcessNames(): string[] {
-    return this.startOrder;
+    return this.configManager.getStartOrder();
   }
 
   /**
-   * Get the underlying orchestrator (for advanced use cases)
+   * Get the output buffer manager
    */
-  getOrchestrator(): Orchestrator {
-    return this.orchestrator;
+  getBufferManager(): OutputBufferManager {
+    return this.bufferManager;
   }
 
   /**
-   * Attach to tmux session
-   * This will display the overview window and allow switching between process windows
+   * Get the config manager (for advanced use)
    */
-  async attach(): Promise<void> {
-    debug.info('Attaching to tmux session');
-    try {
-      await this.orchestrator.attach();
-    } catch (error) {
-      debug.error('Failed to attach to tmux session', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error;
+  getConfigManager(): ConfigManager {
+    return this.configManager;
+  }
+
+  /**
+   * Get the process manager (for advanced use)
+   */
+  getProcessManager(): ProcessManager {
+    return this.processManager;
+  }
+
+  /**
+   * Check if orchestration has started
+   */
+  get started(): boolean {
+    return this.isStarted;
+  }
+
+  /**
+   * Start a single process
+   */
+  private async startProcess(name: string): Promise<void> {
+    const config = this.configManager.getProcessConfig(name);
+    if (!config) {
+      throw new Error(`Process '${name}' not found in configuration`);
     }
+
+    this.bootLogger.printProcessStarting(name, 0, config.category ?? 'default');
+
+    await this.processManager.start(name);
+  }
+
+  /**
+   * Initialize IPC server
+   */
+  private async initializeIPC(): Promise<void> {
+    const socketPath = `/tmp/orckit-${this.configManager.getProjectName()}.sock`;
+
+    debug.debug('Initializing IPC server', { socketPath });
+
+    this.ipcServer = new IPCServer({ socketPath });
+    await this.ipcServer.start();
+
+    // Connect IPC to process manager
+    this.processManager.setIPCServer(this.ipcServer);
+
+    // Setup command handlers
+    this.setupIPCHandlers();
+
+    debug.info('IPC server started');
+  }
+
+  /**
+   * Setup IPC command handlers
+   */
+  private setupIPCHandlers(): void {
+    if (!this.ipcServer) return;
+
+    const server = this.ipcServer.getServer();
+    if (!server) return;
+
+    // Handle commands
+    server.on('ipc:command', async (message: CommandMessage, socket: Socket) => {
+      debug.info('Received IPC command', {
+        action: message.action,
+        process: message.processName,
+      });
+
+      try {
+        switch (message.action) {
+          case 'restart':
+            await this.processManager.restart(message.processName);
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              true,
+              `Process ${message.processName} restarted`
+            );
+            break;
+
+          case 'stop':
+            await this.processManager.stop(message.processName);
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              true,
+              `Process ${message.processName} stopped`
+            );
+            break;
+
+          case 'start':
+            await this.startProcess(message.processName);
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              true,
+              `Process ${message.processName} started`
+            );
+            break;
+
+          case 'logs':
+            const buffer = this.bufferManager.getBuffer(message.processName);
+            this.ipcServer!.sendCommandResponse(socket, true, 'Buffer retrieved', {
+              lines: buffer,
+            });
+            break;
+
+          default:
+            this.ipcServer!.sendCommandResponse(
+              socket,
+              false,
+              `Unknown action: ${message.action}`
+            );
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        debug.error('IPC command failed', { error: errorMessage });
+        this.ipcServer!.sendCommandResponse(socket, false, errorMessage);
+      }
+    });
+
+    // Handle buffer requests
+    server.on('ipc:buffer_request', (message: BufferRequestMessage, socket: Socket) => {
+      debug.debug('Received buffer request', { processName: message.processName });
+
+      try {
+        const buffer = this.bufferManager.getBuffer(message.processName);
+        const stats = this.bufferManager.getBufferStats(message.processName);
+
+        const lines = buffer.map((line) => ({
+          content: line.content,
+          timestamp: line.timestamp,
+          processName: line.processName,
+          level: line.level,
+          lineNumber: line.lineNumber,
+        }));
+
+        this.ipcServer!.sendBufferSync(
+          socket,
+          message.processName,
+          lines,
+          stats?.totalLines ?? 0,
+          stats?.maxSize ?? 0
+        );
+      } catch (error) {
+        debug.error('Buffer request failed', { error });
+      }
+    });
+  }
+
+  /**
+   * Setup event forwarding from ProcessManager
+   */
+  private setupProcessManagerEvents(): void {
+    this.processManager.on('process:starting', (event) => {
+      this.emit('process:starting', event);
+    });
+
+    this.processManager.on('process:ready', (event) => {
+      this.bootLogger.printProcessReady(event.processName);
+      this.emit('process:ready', event);
+    });
+
+    this.processManager.on('process:status', (event) => {
+      this.emit('process:status', event);
+    });
+
+    this.processManager.on('process:failed', (event) => {
+      this.emit('process:failed', event);
+    });
+
+    this.processManager.on('process:stopped', (event) => {
+      this.emit('process:stopped', event);
+    });
+
+    this.processManager.on('process:restarting', (event) => {
+      this.emit('process:restarting', event);
+    });
+  }
+
+  /**
+   * Convert status snapshot to IPC format
+   */
+  private convertSnapshotToIPCProcesses(snapshot: StatusSnapshot): IPCProcessInfo[] {
+    return Array.from(snapshot.processes.values()).map((process) => {
+      const uptime = process.lastStartTime
+        ? Date.now() - process.lastStartTime
+        : undefined;
+
+      const buildInfo = process.buildMetrics
+        ? {
+            progress: process.buildMetrics.progress,
+            duration: process.buildMetrics.duration,
+            errors: process.buildMetrics.errors,
+            warnings: process.buildMetrics.warnings,
+          }
+        : undefined;
+
+      return {
+        name: process.name,
+        status: process.status,
+        category: process.category,
+        uptime,
+        pid: process.pid,
+        restartCount: process.restartCount,
+        buildInfo,
+      };
+    });
   }
 }
+

@@ -156,22 +156,24 @@ describe('IPCServer', () => {
 
       server.broadcastLog('test-process', 'stdout', 'Hello from process');
       server.broadcastLog('test-process', 'stderr', 'Error message');
+      server.flush(); // Force flush the batch
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(messages.length).toBe(2);
+      // Logs are batched, so we get a single log_batch message
+      expect(messages.length).toBe(1);
 
-      const log1 = messages[0] as LogMessage;
-      const log2 = messages[1] as LogMessage;
+      const batch = messages[0] as any;
+      expect(batch.type).toBe('log_batch');
+      expect(batch.logs.length).toBe(2);
 
-      expect(log1.type).toBe('log');
-      expect(log1.processName).toBe('test-process');
-      expect(log1.level).toBe('stdout');
-      expect(log1.content).toBe('Hello from process');
+      expect(batch.logs[0].processName).toBe('test-process');
+      expect(batch.logs[0].level).toBe('stdout');
+      expect(batch.logs[0].content).toBe('Hello from process');
 
-      expect(log2.type).toBe('log');
-      expect(log2.level).toBe('stderr');
-      expect(log2.content).toBe('Error message');
+      expect(batch.logs[1].processName).toBe('test-process');
+      expect(batch.logs[1].level).toBe('stderr');
+      expect(batch.logs[1].content).toBe('Error message');
 
       client.destroy();
     });
@@ -474,7 +476,7 @@ describe('IPCServer', () => {
     it('should include timestamp in log messages', async () => {
       await server.start();
 
-      const messages: LogMessage[] = [];
+      const messages: any[] = [];
       const client = await connectClient(testSocketPath);
 
       client.on('data', (data) => {
@@ -484,12 +486,15 @@ describe('IPCServer', () => {
 
       const before = Date.now();
       server.broadcastLog('test', 'stdout', 'message');
+      server.flush();
       const after = Date.now();
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(messages.length).toBe(1);
-      const timestamp = new Date(messages[0].timestamp).getTime();
+      expect(messages[0].type).toBe('log_batch');
+      const logEntry = messages[0].logs[0];
+      const timestamp = new Date(logEntry.timestamp).getTime();
       expect(timestamp).toBeGreaterThanOrEqual(before);
       expect(timestamp).toBeLessThanOrEqual(after);
 

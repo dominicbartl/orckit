@@ -5,7 +5,6 @@
 import { EventEmitter } from 'events';
 import type { ProcessConfig, ProcessStatus, BuildInfo } from '../types/index.js';
 import type { ResultPromise } from 'execa';
-import type { TmuxManager } from '../core/tmux/manager.js';
 
 /**
  * Base process runner
@@ -18,12 +17,10 @@ export abstract class ProcessRunner extends EventEmitter {
   protected stopTime: Date | null = null;
   protected _restartCount = 0;
   protected _pid: number | null = null;
-  protected paneId: string | null = null;
 
   constructor(
     protected name: string,
-    protected config: ProcessConfig,
-    protected tmuxManager?: TmuxManager
+    protected config: ProcessConfig
   ) {
     super();
   }
@@ -101,5 +98,14 @@ export abstract class ProcessRunner extends EventEmitter {
       warnings: buildInfo.warnings ?? this._buildInfo?.warnings ?? 0,
     };
     this.emit('build:info', this._buildInfo);
+  }
+
+  /**
+   * Process output line (for external output feeding, e.g., from tmux)
+   * Override in subclasses that need to parse output
+   */
+  processOutputLine(_line: string, _isStderr: boolean = false): void {
+    // Default: do nothing
+    // Subclasses can override to parse build output, etc.
   }
 }

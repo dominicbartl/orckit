@@ -422,10 +422,61 @@ export interface LogMessage {
 }
 
 /**
+ * Output line for buffer sync
+ */
+export interface OutputLine {
+  content: string;       // Raw line content (preserves ANSI codes)
+  timestamp: Date;
+  processName: string;
+  level: 'stdout' | 'stderr';
+  lineNumber: number;    // Global line number
+}
+
+/**
+ * Buffer sync message (Server → Client)
+ * Sends full buffer contents when client connects
+ */
+export interface BufferSyncMessage {
+  type: 'buffer_sync';
+  processName: string;
+  lines: OutputLine[];
+  totalLines: number;
+  maxSize: number;
+}
+
+/**
+ * Buffer request message (Client → Server)
+ * Request buffer data for pagination
+ */
+export interface BufferRequestMessage {
+  type: 'buffer_request';
+  processName: string;
+  start?: number;    // Start index (default: 0)
+  count?: number;    // Number of lines (default: all)
+}
+
+/**
+ * Log batch message (Server → Client)
+ * Batched log streaming for performance
+ */
+export interface LogBatchMessage {
+  type: 'log_batch';
+  logs: Array<{
+    processName: string;
+    level: 'stdout' | 'stderr';
+    content: string;
+    timestamp: Date;
+  }>;
+}
+
+/**
  * Union type for all IPC messages
  */
 export type IPCMessage =
   | StatusUpdateMessage
   | CommandMessage
   | CommandResponseMessage
-  | LogMessage;
+  | LogMessage
+  | BufferSyncMessage
+  | BufferRequestMessage
+  | LogBatchMessage;

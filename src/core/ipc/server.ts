@@ -11,13 +11,17 @@ import type {
   StatusUpdateMessage,
   CommandMessage,
   CommandResponseMessage,
-  LogMessage,
+  BufferSyncMessage,
+  BufferRequestMessage,
+  LogBatchMessage,
+  OutputLine,
   IPCProcessInfo,
   SystemMetrics,
 } from '../../types/index.js';
 
 export interface IPCServerOptions {
   socketPath: string;
+  batchInterval?: number; // Milliseconds between log batch broadcasts (default: 100ms)
 }
 
 /**
@@ -27,9 +31,13 @@ export class IPCServer {
   private server: NetServer | null = null;
   private clients: Set<Socket> = new Set();
   private socketPath: string;
+  private batchInterval: number;
+  private logBatch: LogBatchMessage['logs'] = [];
+  private batchTimer: NodeJS.Timeout | null = null;
 
   constructor(options: IPCServerOptions) {
     this.socketPath = options.socketPath;
+    this.batchInterval = options.batchInterval ?? 100;
   }
 
   /**
@@ -51,6 +59,8 @@ export class IPCServer {
       });
 
       this.server.listen(this.socketPath, () => {
+        // Start batch timer
+        this.startBatchTimer();
         resolve();
       });
     });
@@ -60,6 +70,12 @@ export class IPCServer {
    * Stop the IPC server and clean up
    */
   async stop(): Promise<void> {
+    // Stop batch timer
+    this.stopBatchTimer();
+
+    // Flush any remaining batched logs
+    this.flushLogBatch();
+
     // Close all client connections
     for (const client of this.clients) {
       client.destroy();
@@ -112,8 +128,16 @@ export class IPCServer {
     });
 
     socket.on('error', (error) => {
-      console.error('IPC socket error:', error);
+      // Only log non-EPIPE errors (EPIPE is expected when client disconnects)
+      if ((error as NodeJS.ErrnoException).code !== 'EPIPE') {
+        console.error('IPC socket error:', error);
+      }
       this.clients.delete(socket);
+      try {
+        socket.destroy();
+      } catch {
+        // Already destroyed
+      }
     });
   }
 
@@ -123,6 +147,8 @@ export class IPCServer {
   private handleMessage(socket: Socket, message: IPCMessage): void {
     if (message.type === 'command') {
       this.handleCommand(socket, message as CommandMessage);
+    } else if (message.type === 'buffer_request') {
+      this.handleBufferRequest(socket, message as BufferRequestMessage);
     }
   }
 
@@ -154,17 +180,58 @@ export class IPCServer {
 
   /**
    * Send log message to all connected clients
+   * Note: Logs are batched for performance
    */
   broadcastLog(processName: string, level: 'stdout' | 'stderr', content: string): void {
-    const message: LogMessage = {
-      type: 'log',
+    this.logBatch.push({
       processName,
-      timestamp: new Date(),
       level,
       content,
+      timestamp: new Date(),
+    });
+
+    // If batch is large, flush immediately
+    if (this.logBatch.length >= 100) {
+      this.flushLogBatch();
+    }
+  }
+
+  /**
+   * Send buffer sync message to a specific client
+   */
+  sendBufferSync(
+    socket: Socket,
+    processName: string,
+    lines: OutputLine[],
+    totalLines: number,
+    maxSize: number
+  ): void {
+    const message: BufferSyncMessage = {
+      type: 'buffer_sync',
+      processName,
+      lines,
+      totalLines,
+      maxSize,
+    };
+
+    this.send(socket, message);
+  }
+
+  /**
+   * Broadcast log batch to all connected clients
+   */
+  private broadcastLogBatch(): void {
+    if (this.logBatch.length === 0) {
+      return;
+    }
+
+    const message: LogBatchMessage = {
+      type: 'log_batch',
+      logs: [...this.logBatch],
     };
 
     this.broadcast(message);
+    this.logBatch = [];
   }
 
   /**
@@ -188,12 +255,31 @@ export class IPCServer {
     const json = JSON.stringify(message) + '\n';
     const buffer = Buffer.from(json);
 
+    // Create array to avoid modifying Set during iteration
+    const clientsToRemove: Socket[] = [];
+
     for (const client of this.clients) {
+      // Check if socket is still writable
+      if (!client.writable || client.destroyed) {
+        clientsToRemove.push(client);
+        continue;
+      }
+
       try {
         client.write(buffer);
       } catch (error) {
-        console.error('Failed to send message to client:', error);
-        this.clients.delete(client);
+        // Socket is broken, mark for removal
+        clientsToRemove.push(client);
+      }
+    }
+
+    // Remove disconnected clients
+    for (const client of clientsToRemove) {
+      this.clients.delete(client);
+      try {
+        client.destroy();
+      } catch {
+        // Already destroyed
       }
     }
   }
@@ -202,12 +288,23 @@ export class IPCServer {
    * Send message to specific client
    */
   private send(socket: Socket, message: IPCMessage): void {
+    // Check if socket is still writable
+    if (!socket.writable || socket.destroyed) {
+      this.clients.delete(socket);
+      return;
+    }
+
     const json = JSON.stringify(message) + '\n';
     try {
       socket.write(json);
     } catch (error) {
-      console.error('Failed to send message to client:', error);
+      // Socket is broken, clean up
       this.clients.delete(socket);
+      try {
+        socket.destroy();
+      } catch {
+        // Already destroyed
+      }
     }
   }
 
@@ -223,5 +320,53 @@ export class IPCServer {
    */
   getServer(): NetServer | null {
     return this.server;
+  }
+
+  /**
+   * Handle buffer request from client
+   */
+  private handleBufferRequest(socket: Socket, message: BufferRequestMessage): void {
+    // Emit event for orchestrator to handle
+    // The orchestrator will call sendBufferSync with the data
+    if (this.server) {
+      this.server.emit('ipc:buffer_request', message, socket);
+    }
+  }
+
+  /**
+   * Start batch timer
+   */
+  private startBatchTimer(): void {
+    if (this.batchTimer) {
+      return;
+    }
+
+    this.batchTimer = setInterval(() => {
+      this.flushLogBatch();
+    }, this.batchInterval);
+  }
+
+  /**
+   * Stop batch timer
+   */
+  private stopBatchTimer(): void {
+    if (this.batchTimer) {
+      clearInterval(this.batchTimer);
+      this.batchTimer = null;
+    }
+  }
+
+  /**
+   * Flush log batch immediately
+   */
+  private flushLogBatch(): void {
+    this.broadcastLogBatch();
+  }
+
+  /**
+   * Force flush any pending log batches (useful for testing)
+   */
+  flush(): void {
+    this.flushLogBatch();
   }
 }
