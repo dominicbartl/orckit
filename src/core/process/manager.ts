@@ -17,6 +17,12 @@ import { createRunner } from '../../runners/factory.js';
 import { StatusMonitor } from '../status/monitor.js';
 import { OutputBufferManager } from '../output/buffer-manager.js';
 import { IPCServer } from '../ipc/server.js';
+import {
+  createHealthChecker,
+  waitForReady,
+  LogPatternHealthChecker,
+  type HealthChecker,
+} from '../health/checker.js';
 import { createDebugLogger } from '../../utils/logger.js';
 
 const debug = createDebugLogger('ProcessManager');
@@ -81,6 +87,7 @@ export interface ProcessManagerEvents {
 export class ProcessManager extends EventEmitter {
   private runners: Map<string, ProcessRunner> = new Map();
   private configs: Map<string, ProcessConfig> = new Map();
+  private healthCheckers: Map<string, HealthChecker> = new Map();
   private stoppedProcesses: Set<string> = new Set();
   private statusMonitor?: StatusMonitor;
   private bufferManager?: OutputBufferManager;
@@ -179,6 +186,26 @@ export class ProcessManager extends EventEmitter {
       // Setup event handlers
       this.setupRunnerEvents(name, runner);
 
+      // Create health checker if ready config exists
+      let healthChecker: HealthChecker | undefined;
+      if (config.ready && config.ready.type !== 'exit-code') {
+        healthChecker = createHealthChecker(config.ready);
+        this.healthCheckers.set(name, healthChecker);
+
+        // For log-pattern, wire up the checker to process output
+        if (config.ready.type === 'log-pattern' && healthChecker instanceof LogPatternHealthChecker) {
+          const logChecker = healthChecker;
+          runner.on('stdout', (line: string) => {
+            if (logChecker.processLogLine(line)) {
+              debug.info(`Log pattern matched for ${name}`);
+            }
+          });
+          runner.on('stderr', (line: string) => {
+            logChecker.processLogLine(line);
+          });
+        }
+      }
+
       // Start the runner
       await runner.start();
       debug.info(`Runner started for ${name}`);
@@ -189,6 +216,53 @@ export class ProcessManager extends EventEmitter {
       // Update status with PID
       if (this.statusMonitor && runner.pid) {
         this.statusMonitor.updateProcessPid(name, runner.pid);
+      }
+
+      // Wait for health check to pass (if configured)
+      if (healthChecker && config.ready) {
+        debug.info(`Waiting for ${name} to become ready...`, { type: config.ready.type });
+
+        try {
+          await waitForReady(healthChecker, config.ready, (attempt, result) => {
+            debug.debug(`Health check attempt ${attempt} for ${name}`, {
+              success: result.success,
+              message: result.message,
+            });
+          });
+
+          debug.info(`Process ${name} is ready`);
+
+          // Update status to running
+          if (this.statusMonitor) {
+            this.statusMonitor.updateProcessStatus(name, 'running');
+          }
+
+          this.emit('process:ready', { processName: name, timestamp: new Date() });
+        } catch (error) {
+          debug.error(`Health check failed for ${name}`, {
+            error: error instanceof Error ? error.message : error,
+          });
+
+          // Mark as failed if health check times out
+          if (this.statusMonitor) {
+            this.statusMonitor.updateProcessStatus(name, 'failed');
+          }
+
+          this.emit('process:failed', {
+            processName: name,
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+
+          // Stop the process since it failed health check
+          await this.stop(name);
+          throw error;
+        }
+      } else {
+        // No health check configured - mark as ready immediately
+        if (this.statusMonitor) {
+          this.statusMonitor.updateProcessStatus(name, 'running');
+        }
+        this.emit('process:ready', { processName: name, timestamp: new Date() });
       }
     } catch (error) {
       debug.error(`Failed to start process ${name}`, {
@@ -223,6 +297,7 @@ export class ProcessManager extends EventEmitter {
     try {
       await runner.stop();
       this.runners.delete(name);
+      this.healthCheckers.delete(name);
       this.stoppedProcesses.add(name);
 
       // Update status
@@ -249,6 +324,11 @@ export class ProcessManager extends EventEmitter {
    * Restart a process
    */
   async restart(name: string): Promise<void> {
+    const config = this.configs.get(name);
+    if (!config) {
+      throw new Error(`Process '${name}' is not registered`);
+    }
+
     const runner = this.runners.get(name);
     if (!runner) {
       // Not running, just start it
@@ -257,7 +337,13 @@ export class ProcessManager extends EventEmitter {
     }
 
     debug.info(`Restarting process: ${name}`);
-    await runner.restart();
+
+    // Emit restarting event
+    this.emit('process:restarting', { processName: name, restartCount: 1 });
+
+    // Stop and then start again to ensure clean state
+    await this.stop(name);
+    await this.start(name);
   }
 
   /**
