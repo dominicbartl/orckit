@@ -72,17 +72,55 @@ program
         headless: options.headless,
       });
 
-      // Listen to events
-      orckit.on('process:starting', (event: { processName: string }) => {
+      // Listen to all process lifecycle events
+      orckit.on('process:starting', (event: { processName: string; timestamp: Date }) => {
         console.log(chalk.yellow(`  ⚙  Starting ${event.processName}...`));
       });
 
-      orckit.on('process:ready', (event: { processName: string; duration: number }) => {
-        console.log(chalk.green(`  ✓  ${event.processName} ready (${event.duration}ms)`));
+      orckit.on('process:ready', (event: { processName: string; timestamp: Date }) => {
+        const duration = Date.now() - event.timestamp.getTime();
+        console.log(chalk.green(`  ✓  ${event.processName} ready (${duration}ms)`));
+      });
+
+      orckit.on('process:status', (event: { processName: string; status: string }) => {
+        const statusColor =
+          event.status === 'running' ? chalk.green :
+          event.status === 'building' ? chalk.cyan :
+          event.status === 'failed' ? chalk.red :
+          event.status === 'stopped' ? chalk.gray :
+          chalk.yellow;
+        console.log(statusColor(`  →  ${event.processName}: ${event.status}`));
+      });
+
+      orckit.on('process:failed', (event: { processName: string; error: Error }) => {
+        console.log(chalk.red(`  ✗  ${event.processName} failed: ${event.error.message}`));
+      });
+
+      orckit.on('process:stopped', (event: { processName: string; timestamp: Date }) => {
+        console.log(chalk.gray(`  ⏹  ${event.processName} stopped`));
+      });
+
+      orckit.on('process:restarting', (event: { processName: string; restartCount: number }) => {
+        console.log(chalk.yellow(`  ↻  ${event.processName} restarting (attempt ${event.restartCount})...`));
       });
 
       orckit.on('all:ready', () => {
         console.log(chalk.green('\n✓  All processes started successfully!\n'));
+      });
+
+      // Listen to build events (for webpack, angular, etc.)
+      orckit.on('build:progress', (event: { processName: string; progress: number }) => {
+        console.log(chalk.cyan(`  🔨 ${event.processName}: Building... ${event.progress}%`));
+      });
+
+      orckit.on('build:stats', (event: { processName: string; errors: number; warnings: number }) => {
+        if (event.errors > 0) {
+          console.log(chalk.red(`  ⚠  ${event.processName}: ${event.errors} error(s), ${event.warnings} warning(s)`));
+        } else if (event.warnings > 0) {
+          console.log(chalk.yellow(`  ⚠  ${event.processName}: ${event.warnings} warning(s)`));
+        } else {
+          console.log(chalk.green(`  ✓  ${event.processName}: Build successful`));
+        }
       });
 
       await orckit.start(processes.length > 0 ? processes : undefined);
