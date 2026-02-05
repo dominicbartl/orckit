@@ -17,7 +17,6 @@ import { ProcessRunner } from '../../runners/base.js';
 import { createRunner } from '../../runners/factory.js';
 import { StatusMonitor } from '../status/monitor.js';
 import { OutputBufferManager } from '../output/buffer-manager.js';
-import { IPCServer } from '../ipc/server.js';
 import {
   createHealthChecker,
   waitForReady,
@@ -41,11 +40,6 @@ export interface ProcessManagerOptions {
    * Optional output buffer manager for capturing logs
    */
   bufferManager?: OutputBufferManager;
-
-  /**
-   * Optional IPC server for broadcasting events
-   */
-  ipcServer?: IPCServer;
 
   /**
    * Print process stdout/stderr to terminal (default: false)
@@ -97,14 +91,12 @@ export class ProcessManager extends EventEmitter {
   private stoppedProcesses: Set<string> = new Set();
   private statusMonitor?: StatusMonitor;
   private bufferManager?: OutputBufferManager;
-  private ipcServer?: IPCServer;
   private processDebug: boolean;
 
   constructor(options: ProcessManagerOptions = {}) {
     super();
     this.statusMonitor = options.statusMonitor;
     this.bufferManager = options.bufferManager;
-    this.ipcServer = options.ipcServer;
     this.processDebug = options.processDebug ?? false;
   }
 
@@ -120,13 +112,6 @@ export class ProcessManager extends EventEmitter {
    */
   setBufferManager(manager: OutputBufferManager): void {
     this.bufferManager = manager;
-  }
-
-  /**
-   * Set the IPC server (allows late binding)
-   */
-  setIPCServer(server: IPCServer): void {
-    this.ipcServer = server;
   }
 
   /**
@@ -508,13 +493,10 @@ export class ProcessManager extends EventEmitter {
       this.emit('build:stats', { processName: name, ...stats });
     });
 
-    // Forward stdout/stderr to buffer, IPC, and optionally terminal
+    // Forward stdout/stderr to buffer and optionally terminal
     runner.on('stdout', (data: string) => {
       if (this.bufferManager) {
         this.bufferManager.appendLine(name, data, 'stdout');
-      }
-      if (this.ipcServer) {
-        this.ipcServer.broadcastLog(name, 'stdout', data);
       }
       if (this.processDebug) {
         console.log(chalk.cyan(`[${name}]`) + ' ' + data);
@@ -524,9 +506,6 @@ export class ProcessManager extends EventEmitter {
     runner.on('stderr', (data: string) => {
       if (this.bufferManager) {
         this.bufferManager.appendLine(name, data, 'stderr');
-      }
-      if (this.ipcServer) {
-        this.ipcServer.broadcastLog(name, 'stderr', data);
       }
       if (this.processDebug) {
         console.error(chalk.red(`[${name}]`) + ' ' + data);

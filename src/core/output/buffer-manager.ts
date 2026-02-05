@@ -57,8 +57,8 @@ export class OutputBufferManager {
     const lines = content.split('\n');
 
     for (const line of lines) {
-      // Skip empty lines (except the last one if content ended with \n)
-      if (line === '' && lines[lines.length - 1] === '') continue;
+      // Skip empty lines and whitespace-only lines
+      if (line.trim() === '') continue;
 
       const outputLine: OutputLine = {
         content: line,

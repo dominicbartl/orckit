@@ -183,6 +183,12 @@ export function sleep(ms: number): Promise<void> {
 export function getProcessEnv(processEnv: Record<string, string> = {}): Record<string, string> {
   return {
     ...process.env,
+    // Force color output even when not attached to a TTY
+    FORCE_COLOR: '1',
+    COLORTERM: 'truecolor',
+    // npm/yarn/pnpm colors
+    npm_config_color: 'always',
+    // User overrides can still disable colors
     ...processEnv,
   } as Record<string, string>;
 }

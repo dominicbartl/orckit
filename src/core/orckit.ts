@@ -8,7 +8,6 @@
  * - ProcessManager: Runner lifecycle (start/stop/restart)
  * - StatusMonitor: Real-time status and resource tracking
  * - OutputBufferManager: Process output buffering
- * - IPCServer: Inter-process communication for TUI
  * - BootLogger: Boot sequence display
  *
  * Each manager is independently testable.
@@ -18,19 +17,14 @@ import { EventEmitter } from 'node:events';
 import type {
   OrckitConfig,
   ProcessStatus,
-  IPCProcessInfo,
-  CommandMessage,
-  BufferRequestMessage,
 } from '../types/index.js';
 import { ConfigManager, type ConfigManagerOptions } from './config/manager.js';
 import { ProcessManager } from './process/manager.js';
 import { StatusMonitor, type StatusSnapshot } from './status/monitor.js';
 import { OutputBufferManager } from './output/buffer-manager.js';
-import { IPCServer } from './ipc/server.js';
 import { BootLogger } from './boot/logger.js';
 import { runPreflight } from './preflight/runner.js';
 import { createDebugLogger } from '../utils/logger.js';
-import type { Socket } from 'node:net';
 
 const debug = createDebugLogger('Orckit');
 
@@ -47,11 +41,6 @@ export interface OrckitOptions extends ConfigManagerOptions {
    * Status update interval in milliseconds (default: 1000)
    */
   statusUpdateInterval?: number;
-
-  /**
-   * Enable IPC server for TUI communication (default: true)
-   */
-  enableIPC?: boolean;
 
   /**
    * Default buffer size for process output (default: 10000)
@@ -116,11 +105,10 @@ export class Orckit extends EventEmitter {
   private readonly statusMonitor: StatusMonitor | null;
   private readonly bufferManager: OutputBufferManager;
   private readonly bootLogger: BootLogger;
-  private ipcServer: IPCServer | null = null;
 
   // Options
   private readonly options: Required<
-    Pick<OrckitOptions, 'enableStatusMonitor' | 'enableIPC' | 'skipPreflight' | 'processDebug' | 'headless'>
+    Pick<OrckitOptions, 'enableStatusMonitor' | 'skipPreflight' | 'processDebug' | 'headless'>
   >;
 
   // State
@@ -134,7 +122,6 @@ export class Orckit extends EventEmitter {
     // Store options with defaults
     this.options = {
       enableStatusMonitor: options.enableStatusMonitor ?? true,
-      enableIPC: options.enableIPC ?? true,
       skipPreflight: options.skipPreflight ?? false,
       processDebug: options.processDebug ?? false,
       headless: options.headless ?? false,
@@ -168,12 +155,6 @@ export class Orckit extends EventEmitter {
       // Forward status snapshots
       this.statusMonitor.on('snapshot', (snapshot: StatusSnapshot) => {
         this.emit('status:update', snapshot);
-
-        // Broadcast to IPC clients
-        if (this.ipcServer) {
-          const processes = this.convertSnapshotToIPCProcesses(snapshot);
-          this.ipcServer.broadcastStatus(processes);
-        }
       });
     } else {
       this.statusMonitor = null;
@@ -246,11 +227,6 @@ export class Orckit extends EventEmitter {
       debug.info('Preflight checks passed');
     }
 
-    // Start IPC server if enabled
-    if (this.options.enableIPC) {
-      await this.initializeIPC();
-    }
-
     // Start status monitor
     if (this.statusMonitor) {
       debug.debug('Starting status monitor');
@@ -309,12 +285,6 @@ export class Orckit extends EventEmitter {
     // Stop status monitor
     if (this.statusMonitor) {
       this.statusMonitor.stop();
-    }
-
-    // Stop IPC server
-    if (this.ipcServer) {
-      await this.ipcServer.stop();
-      this.ipcServer = null;
     }
 
     // Cleanup buffers
@@ -438,121 +408,6 @@ export class Orckit extends EventEmitter {
   }
 
   /**
-   * Initialize IPC server
-   */
-  private async initializeIPC(): Promise<void> {
-    const socketPath = `/tmp/orckit-${this.configManager.getProjectName()}.sock`;
-
-    debug.debug('Initializing IPC server', { socketPath });
-
-    this.ipcServer = new IPCServer({ socketPath });
-    await this.ipcServer.start();
-
-    // Connect IPC to process manager
-    this.processManager.setIPCServer(this.ipcServer);
-
-    // Setup command handlers
-    this.setupIPCHandlers();
-
-    debug.info('IPC server started');
-  }
-
-  /**
-   * Setup IPC command handlers
-   */
-  private setupIPCHandlers(): void {
-    if (!this.ipcServer) return;
-
-    const server = this.ipcServer.getServer();
-    if (!server) return;
-
-    // Handle commands
-    server.on('ipc:command', async (message: CommandMessage, socket: Socket) => {
-      debug.info('Received IPC command', {
-        action: message.action,
-        process: message.processName,
-      });
-
-      try {
-        switch (message.action) {
-          case 'restart':
-            await this.processManager.restart(message.processName);
-            this.ipcServer!.sendCommandResponse(
-              socket,
-              true,
-              `Process ${message.processName} restarted`
-            );
-            break;
-
-          case 'stop':
-            await this.processManager.stop(message.processName);
-            this.ipcServer!.sendCommandResponse(
-              socket,
-              true,
-              `Process ${message.processName} stopped`
-            );
-            break;
-
-          case 'start':
-            await this.startProcess(message.processName);
-            this.ipcServer!.sendCommandResponse(
-              socket,
-              true,
-              `Process ${message.processName} started`
-            );
-            break;
-
-          case 'logs':
-            const buffer = this.bufferManager.getBuffer(message.processName);
-            this.ipcServer!.sendCommandResponse(socket, true, 'Buffer retrieved', {
-              lines: buffer,
-            });
-            break;
-
-          default:
-            this.ipcServer!.sendCommandResponse(
-              socket,
-              false,
-              `Unknown action: ${message.action}`
-            );
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        debug.error('IPC command failed', { error: errorMessage });
-        this.ipcServer!.sendCommandResponse(socket, false, errorMessage);
-      }
-    });
-
-    // Handle buffer requests
-    server.on('ipc:buffer_request', (message: BufferRequestMessage, socket: Socket) => {
-      debug.debug('Received buffer request', { processName: message.processName });
-
-      try {
-        const buffer = this.bufferManager.getBuffer(message.processName);
-        const stats = this.bufferManager.getBufferStats(message.processName);
-
-        const lines = buffer.map((line) => ({
-          content: line.content,
-          timestamp: line.timestamp,
-          processName: line.processName,
-          level: line.level,
-          lineNumber: line.lineNumber,
-        }));
-
-        this.ipcServer!.sendBufferSync(
-          socket,
-          message.processName,
-          lines,
-          stats?.totalLines ?? 0,
-          stats?.maxSize ?? 0
-        );
-      } catch (error) {
-        debug.error('Buffer request failed', { error });
-      }
-    });
-  }
-
-  /**
    * Setup event forwarding from ProcessManager
    */
   private setupProcessManagerEvents(): void {
@@ -579,36 +434,6 @@ export class Orckit extends EventEmitter {
 
     this.processManager.on('process:restarting', (event) => {
       this.emit('process:restarting', event);
-    });
-  }
-
-  /**
-   * Convert status snapshot to IPC format
-   */
-  private convertSnapshotToIPCProcesses(snapshot: StatusSnapshot): IPCProcessInfo[] {
-    return Array.from(snapshot.processes.values()).map((process) => {
-      const uptime = process.lastStartTime
-        ? Date.now() - process.lastStartTime
-        : undefined;
-
-      const buildInfo = process.buildMetrics
-        ? {
-            progress: process.buildMetrics.progress,
-            duration: process.buildMetrics.duration,
-            errors: process.buildMetrics.errors,
-            warnings: process.buildMetrics.warnings,
-          }
-        : undefined;
-
-      return {
-        name: process.name,
-        status: process.status,
-        category: process.category,
-        uptime,
-        pid: process.pid,
-        restartCount: process.restartCount,
-        buildInfo,
-      };
     });
   }
 }
