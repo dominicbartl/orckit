@@ -52,6 +52,7 @@
   "scripts": {
     "dev": "tsx watch src/cli/index.ts",
     "build": "rm -rf dist && tsc && tsc-alias",
+    "postbuild": "chmod +x dist/cli/index.js",
     "build:watch": "tsc --watch",
     "test": "vitest",
     "test:coverage": "vitest --coverage",
