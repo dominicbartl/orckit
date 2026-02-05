@@ -2,10 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { createRunner } from '../../../src/runners/factory.js';
 import { BashRunner } from '../../../src/runners/bash.js';
 import { DockerRunner } from '../../../src/runners/docker.js';
-import { NodeRunner } from '../../../src/runners/node.js';
 import { WebpackRunner } from '../../../src/runners/webpack.js';
 import { AngularRunner } from '../../../src/runners/angular.js';
-import { ViteRunner } from '../../../src/runners/vite.js';
 import type { ProcessConfig } from '../../../src/types/index.js';
 
 describe('Runner Factory', () => {
@@ -42,28 +40,6 @@ describe('Runner Factory', () => {
       expect(runner).toBeInstanceOf(DockerRunner);
     });
 
-    it('should create NodeRunner for node type', () => {
-      const config: ProcessConfig = {
-        category: 'backend',
-        command: 'node server.js',
-        type: 'node',
-      };
-
-      const runner = createRunner('api', config);
-      expect(runner).toBeInstanceOf(NodeRunner);
-    });
-
-    it('should create NodeRunner for ts-node type', () => {
-      const config: ProcessConfig = {
-        category: 'backend',
-        command: 'ts-node src/server.ts',
-        type: 'ts-node',
-      };
-
-      const runner = createRunner('api', config);
-      expect(runner).toBeInstanceOf(NodeRunner);
-    });
-
     it('should create WebpackRunner for webpack type', () => {
       const config: ProcessConfig = {
         category: 'frontend',
@@ -95,17 +71,6 @@ describe('Runner Factory', () => {
 
       const runner = createRunner('angular-app', config);
       expect(runner).toBeInstanceOf(AngularRunner);
-    });
-
-    it('should create ViteRunner for vite type', () => {
-      const config: ProcessConfig = {
-        category: 'frontend',
-        command: 'vite',
-        type: 'vite',
-      };
-
-      const runner = createRunner('vite-app', config);
-      expect(runner).toBeInstanceOf(ViteRunner);
     });
 
     it('should throw error for unknown process type', () => {

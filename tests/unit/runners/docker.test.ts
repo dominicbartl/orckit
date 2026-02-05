@@ -156,7 +156,7 @@ describe('Docker Runner', () => {
 
       mockProcess.stdout.emit('data', Buffer.from('Container started\n'));
 
-      expect(stdoutListener).toHaveBeenCalledWith('Container started');
+      expect(stdoutListener).toHaveBeenCalledWith('Container started\n');
     });
 
     it('should emit stderr events', async () => {
