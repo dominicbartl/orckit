@@ -182,7 +182,7 @@ abstract class ProcessRunner extends EventEmitter {
 **Deep Build Integration**:
 - Webpack: Custom plugin injected to report progress, errors, warnings, size
 - Angular: Parses `--json` output for structured build events
-- Provides real-time build metrics for overview pane
+- Provides real-time build metrics via events
 
 #### 5. Output System (src/utils/logger.ts)
 
