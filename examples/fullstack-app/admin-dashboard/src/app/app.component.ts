@@ -227,7 +227,7 @@ export class AppComponent implements OnInit {
         this.isConnected = true;
       },
       error: (err) => {
-        console.error('Error loadxxing stats:, err);
+        console.error('Error loadxxing stats:', err);
         this.isConnected = false;
       }
     });

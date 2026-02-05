@@ -133,7 +133,7 @@ processes:
   # Tools layer
   api-docs:
     category: tools
-    type: node
+    type: bash
     command: "npx swagger-ui-watcher swagger.yaml"
     cwd: "./api"
     dependencies: [api-server]

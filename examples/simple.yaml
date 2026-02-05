@@ -36,7 +36,7 @@ processes:
   # Backend layer (depends on infrastructure)
   api:
     category: backend
-    type: node
+    type: bash
     command: "npm run dev"
     cwd: "./api"
     dependencies: [postgres, redis]
@@ -88,7 +88,7 @@ processes:
 
   frontend:
     category: frontend
-    type: node
+    type: bash
     command: "npm start"
     cwd: "./web"
     dependencies: [webpack]

@@ -8,4 +8,15 @@ categories:
 processes:
   counter:
     category: counters
-    command: "for i in {1..30}; do echo \"Count: $i\"; sleep 1; done"
+    command: |
+      for i in {1..30000000}; do
+        printf '\e[32m✓ Counter 1:\e[0m \e[1;36m%d\e[0m\n' $i
+        sleep 1
+      done
+  counter2:
+    category: counters
+    command: |
+      for i in {1..30000000}; do
+        printf '\e[35m★ Counter 2:\e[0m \e[1;33m%d\e[0m\n' $i
+        sleep 2
+      done
