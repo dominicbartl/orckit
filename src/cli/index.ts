@@ -10,7 +10,6 @@ import { Orckit } from '../core/orckit.js';
 import { parseConfig } from '../core/config/parser.js';
 import { resolveDependencies, visualizeDependencyGraph } from '../core/dependency/resolver.js';
 import { initializeDebugLogging, debugConfig, LogLevel } from '../utils/logger.js';
-import { launchInkTUI } from './ink-tui.js';
 
 const program = new Command();
 
@@ -88,39 +87,13 @@ program
 
       await orckit.start(processes.length > 0 ? processes : undefined);
 
-      // Check if we should launch TUI
-      const isInteractive = process.stdout.isTTY && process.stdin.isTTY && !options.headless;
+      // Keep process alive
+      console.log(chalk.green('\n✓  Orckit is running'));
+      console.log(chalk.cyan('  View status: orc status\n'));
 
-      if (isInteractive) {
-        // Launch Ink TUI
-        console.log(chalk.cyan('\n📺 Launching interactive TUI...\n'));
-        console.log(chalk.gray('TUI keybindings:'));
-        console.log(chalk.gray('  Tab            - Switch windows'));
-        console.log(chalk.gray('  Ctrl+1-9       - Jump to window'));
-        console.log(chalk.gray('  r              - Restart process'));
-        console.log(chalk.gray('  s              - Stop process'));
-        console.log(chalk.gray('  q              - Quit\n'));
-
-        try {
-          await launchInkTUI({
-            socketPath: `/tmp/orckit-${orckit.getConfig().project ?? 'orckit'}.sock`,
-            config: orckit.getConfig(),
-          });
-        } catch (error) {
-          console.error(chalk.red('Failed to launch TUI:'), error);
-          console.log(chalk.yellow('Falling back to headless mode...'));
-        }
-      } else {
-        // Running in background - keep process alive
-        console.log(chalk.green('\n✓  Orckit is running in headless mode'));
-        console.log(chalk.cyan('  Launch TUI: orc overview'));
-        console.log(chalk.cyan('  View overview: orc overview\n'));
-
-        // Keep process alive
-        await new Promise(() => {
-          /* never resolves */
-        });
-      }
+      await new Promise(() => {
+        /* never resolves */
+      });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
       process.exit(1);
@@ -272,67 +245,6 @@ program
   .action((process: string, _options: { follow?: boolean; config: string }) => {
     console.log(chalk.yellow(`Logs for ${process} (not yet implemented)`));
     // TODO: Implement log viewing
-  });
-
-/**
- * Overview command - Real-time process monitoring with Ink TUI
- */
-program
-  .command('overview')
-  .description('Launch real-time process overview (interactive dashboard)')
-  .option('-c, --config <path>', 'Path to configuration file')
-  .option('-s, --socket <path>', 'Path to IPC socket')
-  .action(async (options: { config?: string; socket?: string }) => {
-    try {
-      let socketPath: string;
-      let config;
-
-      if (options.socket) {
-        // Socket path provided directly
-        socketPath = options.socket;
-
-        // Try to load config if provided
-        if (options.config) {
-          config = parseConfig(options.config);
-        }
-      } else if (options.config) {
-        // Parse config to get project name
-        config = parseConfig(options.config);
-        const projectName = config.project ?? 'orckit';
-        socketPath = `/tmp/orckit-${projectName}.sock`;
-      } else {
-        // Try to find socket in /tmp
-        const fs = await import('node:fs');
-        const files = fs.readdirSync('/tmp');
-        const socketFiles = files.filter((f) => f.startsWith('orckit-') && f.endsWith('.sock'));
-
-        if (socketFiles.length === 0) {
-          throw new Error('No Orckit IPC socket found. Is Orckit running?');
-        } else if (socketFiles.length === 1) {
-          socketPath = `/tmp/${socketFiles[0]}`;
-        } else {
-          throw new Error(
-            `Multiple Orckit sockets found: ${socketFiles.join(', ')}. Specify one with --socket or --config`
-          );
-        }
-      }
-
-      // Launch Ink TUI
-      if (!config) {
-        // Try to load default config
-        try {
-          config = parseConfig('./orckit.yaml');
-        } catch {
-          // No config available - use minimal config
-          config = { version: '1', project: 'orckit', processes: {} };
-        }
-      }
-
-      await launchInkTUI({ socketPath, config });
-    } catch (error) {
-      console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
   });
 
 /**
