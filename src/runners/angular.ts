@@ -2,130 +2,39 @@
  * Angular CLI runner with JSON output parsing
  */
 
-import { execa } from 'execa';
 import { ProcessRunner } from './base.js';
-import { getProcessEnv } from '../utils/system.js';
-import type { BuildInfo } from '../types/index.js';
-
-/**
- * Angular build event from JSON output
- */
-interface AngularBuildEvent {
-  type: 'build-start' | 'build-progress' | 'build-complete' | 'build-error';
-  progress?: number;
-  message?: string;
-  success?: boolean;
-  time?: number;
-  errors?: string[];
-  warnings?: string[];
-}
+import type { ProcessConfig, BuildInfo } from '../types/index.js';
 
 /**
  * Angular CLI runner
  */
 export class AngularRunner extends ProcessRunner {
+  /**
+   * Override start to set initial status to 'building' instead of 'running'
+   */
   async start(): Promise<void> {
-    if (this.process) {
-      throw new Error(`Process ${this.name} is already running`);
+    await super.start();
+    // Override status to 'building' for Angular processes
+    if (this._status === 'running') {
+      this.updateStatus('building');
     }
-
-    this.updateStatus('starting');
-    this.startTime = new Date();
-
-    const cwd = this.config.cwd ?? process.cwd();
-    const env = getProcessEnv(this.config.env);
-
-    // Use command as-is, don't modify it
-    // Note: Angular CLI flags vary by version, let user control them
-    const command = this.config.command;
-
-    // Execute Angular CLI command
-    this.process = execa('bash', ['-c', command], {
-      cwd,
-      env,
-      reject: false,
-      all: true,
-    });
-
-    this._pid = this.process.pid ?? null;
-
-    // Handle stdout - parse Angular output
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const line = data.toString();
-      this.emit('stdout', line);
-
-      // Try to parse as JSON if deep integration
-      if (this.config.integration?.mode === 'deep') {
-        this.parseAngularJSON(line);
-      } else {
-        this.parseAngularText(line);
-      }
-    });
-
-    // Handle stderr
-    this.process.stderr?.on('data', (data: Buffer) => {
-      const line = data.toString();
-      this.emit('stderr', line);
-    });
-
-    // Handle exit
-    void this.process.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.stopTime = new Date();
-      this._pid = null;
-
-      if (code === 0) {
-        this.updateStatus('stopped');
-        this.emit('exit', code, signal);
-      } else {
-        this.updateStatus('failed');
-        this.emit('failed', code, signal);
-      }
-    });
-
-    // Process started successfully
-    this.updateStatus('building');
   }
 
   /**
-   * Parse Angular JSON output
+   * Override parseOutputLine to parse Angular CLI output
    */
-  private parseAngularJSON(line: string): void {
-    try {
-      const event = JSON.parse(line) as AngularBuildEvent;
+  protected parseOutputLine(line: string, _isStderr: boolean): void {
+    // Strip ANSI color codes before parsing
+    const cleanLine = this.stripAnsiCodes(line);
+    this.parseAngularText(cleanLine);
+  }
 
-      switch (event.type) {
-        case 'build-start':
-          this.updateStatus('building');
-          this.emit('build:start');
-          break;
-
-        case 'build-progress':
-          if (event.progress !== undefined) {
-            this.emit('build:progress', { progress: event.progress, message: event.message });
-          }
-          break;
-
-        case 'build-complete':
-          const buildInfo: BuildInfo = {
-            duration: event.time ?? 0,
-            errors: event.errors?.length ?? 0,
-            warnings: event.warnings?.length ?? 0,
-            lastBuildSuccess: event.success ?? false,
-          };
-
-          this.updateBuildInfo(buildInfo);
-          this.updateStatus(event.success ? 'running' : 'failed');
-          this.emit('build:complete', { buildInfo, duration: event.time ?? 0 });
-          break;
-
-        case 'build-error':
-          this.updateStatus('failed');
-          this.emit('build:failed');
-          break;
-      }
-    } catch {
-      // Not JSON, ignore
-    }
+  /**
+   * Strip ANSI escape codes from string
+   */
+  private stripAnsiCodes(str: string): string {
+    // eslint-disable-next-line no-control-regex
+    return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
   }
 
   /**
@@ -133,7 +42,8 @@ export class AngularRunner extends ProcessRunner {
    */
   private parseAngularText(line: string): void {
     // Detect compilation start
-    if (line.includes('Compiling') || line.includes('Building')) {
+    if (line.includes('Compiling') || line.includes('Building') ||
+        line.includes('Generating browser application bundles')) {
       this.updateStatus('building');
       this.emit('build:start');
     }
@@ -145,9 +55,19 @@ export class AngularRunner extends ProcessRunner {
       this.emit('build:progress', { progress });
     }
 
-    // Detect successful build
-    if (line.includes('Compiled successfully') || line.includes('Build complete')) {
+    // Detect successful build - Angular CLI newer patterns
+    if (line.includes('Compiled successfully') ||
+        line.includes('Build complete') ||
+        line.includes('✔ Browser application bundle generation complete') ||
+        line.includes('✔ Index html generation complete') ||
+        line.match(/Build at:.*Time:\s*\d+ms/)) {
+
+      // Extract build time if available
+      const timeMatch = line.match(/Time:\s*(\d+)ms/);
+      const duration = timeMatch ? parseInt(timeMatch[1], 10) : undefined;
+
       const buildInfo: BuildInfo = {
+        duration,
         errors: 0,
         warnings: 0,
         lastBuildSuccess: true,
@@ -159,55 +79,10 @@ export class AngularRunner extends ProcessRunner {
     }
 
     // Detect errors
-    if (line.includes('ERROR') || line.includes('Failed to compile')) {
+    if (line.includes('ERROR') || line.includes('Failed to compile') ||
+        line.includes('✖') || line.includes('Build failed')) {
       this.updateStatus('failed');
       this.emit('build:failed');
-    }
-  }
-
-  /**
-   * Process output line (for external output feeding, e.g., from tmux)
-   */
-  processOutputLine(line: string, isStderr: boolean = false): void {
-    // Emit as stdout/stderr so listeners can capture it
-    if (isStderr) {
-      this.emit('stderr', line);
-    } else {
-      this.emit('stdout', line);
-    }
-
-    // Parse the output for build information
-    if (this.config.integration?.mode === 'deep') {
-      this.parseAngularJSON(line);
-    } else {
-      this.parseAngularText(line);
-    }
-  }
-
-  async stop(): Promise<void> {
-    if (!this.process || !this.process.pid) {
-      return;
-    }
-
-    // Try graceful shutdown first
-    this.process.kill('SIGTERM');
-
-    // Wait up to 10 seconds for graceful shutdown
-    const timeout = setTimeout(() => {
-      if (this.process && this.process.pid) {
-        this.process.kill('SIGKILL');
-      }
-    }, 10000);
-
-    try {
-      await this.process;
-    } catch {
-      // Process may have been killed
-    } finally {
-      clearTimeout(timeout);
-      this.process = null;
-      this._pid = null;
-      this.updateStatus('stopped');
     }
   }
 }

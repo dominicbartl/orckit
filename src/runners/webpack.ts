@@ -2,93 +2,33 @@
  * Webpack process runner with deep integration
  */
 
-import { execa } from 'execa';
 import { ProcessRunner } from './base.js';
-import { getProcessEnv } from '../utils/system.js';
-import type { BuildInfo } from '../types/index.js';
+import type { ProcessConfig, BuildInfo } from '../types/index.js';
 
 /**
  * Webpack runner with deep integration support
  */
 export class WebpackRunner extends ProcessRunner {
+  private buildStartTime: number | null = null;
+
+  /**
+   * Override start to set initial status to 'building' instead of 'running'
+   */
   async start(): Promise<void> {
-    if (this.process) {
-      throw new Error(`Process ${this.name} is already running`);
+    await super.start();
+    // Override status to 'building' for webpack processes
+    if (this._status === 'running') {
+      this.updateStatus('building');
     }
-
-    this.updateStatus('starting');
-    this.startTime = new Date();
-
-    const cwd = this.config.cwd ?? process.cwd();
-    const env = getProcessEnv(this.config.env);
-
-    // Execute webpack command
-    this.process = execa('bash', ['-c', this.config.command], {
-      cwd,
-      env,
-      reject: false,
-      all: true,
-    });
-
-    this._pid = this.process.pid ?? null;
-
-    const buildStartTime: number | null = null;
-
-    // Handle stdout - parse webpack output
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const line = data.toString();
-      this.emit('stdout', line);
-
-      // Parse webpack output for build info
-      this.parseWebpackOutput(line, buildStartTime);
-    });
-
-    // Handle stderr
-    this.process.stderr?.on('data', (data: Buffer) => {
-      const line = data.toString();
-      this.emit('stderr', line);
-    });
-
-    // Handle exit
-    void this.process.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.stopTime = new Date();
-      this._pid = null;
-
-      if (code === 0) {
-        this.updateStatus('stopped');
-        this.emit('exit', code, signal);
-      } else {
-        this.updateStatus('failed');
-        this.emit('failed', code, signal);
-      }
-    });
-
-    // Process started successfully
-    this.updateStatus('building');
   }
 
   /**
-   * Process output line (for external output feeding, e.g., from tmux)
+   * Override parseOutputLine to parse webpack build output
    */
-  processOutputLine(line: string, isStderr: boolean = false): void {
-    // Emit as stdout/stderr so listeners can capture it
-    if (isStderr) {
-      this.emit('stderr', line);
-    } else {
-      this.emit('stdout', line);
-    }
-
-    // Parse webpack output
-    this.parseWebpackOutput(line, null);
-  }
-
-  /**
-   * Parse webpack output for build information
-   */
-  private parseWebpackOutput(line: string, buildStartTime: number | null): void {
+  protected parseOutputLine(line: string, _isStderr: boolean): void {
     // Detect build start
     if (line.includes('webpack') && line.includes('compiling')) {
-      buildStartTime = Date.now();
+      this.buildStartTime = Date.now();
       this.updateStatus('building');
       this.emit('build:start');
     }
@@ -102,7 +42,7 @@ export class WebpackRunner extends ProcessRunner {
 
     // Detect build complete
     if (line.includes('webpack') && line.includes('compiled')) {
-      const duration = buildStartTime ? Date.now() - buildStartTime : 0;
+      const duration = this.buildStartTime ? Date.now() - this.buildStartTime : 0;
 
       // Parse errors and warnings
       const errorMatch = line.match(/(\d+)\s+error/);
@@ -132,33 +72,6 @@ export class WebpackRunner extends ProcessRunner {
     if (line.includes('Failed to compile') || line.includes('ERROR in')) {
       this.updateStatus('failed');
       this.emit('build:failed');
-    }
-  }
-
-  async stop(): Promise<void> {
-    if (!this.process || !this.process.pid) {
-      return;
-    }
-
-    // Try graceful shutdown first
-    this.process.kill('SIGTERM');
-
-    // Wait up to 10 seconds for graceful shutdown
-    const timeout = setTimeout(() => {
-      if (this.process && this.process.pid) {
-        this.process.kill('SIGKILL');
-      }
-    }, 10000);
-
-    try {
-      await this.process;
-    } catch {
-      // Process may have been killed
-    } finally {
-      clearTimeout(timeout);
-      this.process = null;
-      this._pid = null;
-      this.updateStatus('stopped');
     }
   }
 }
