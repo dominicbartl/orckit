@@ -5,6 +5,7 @@ import {
   filterToTargets,
   groupIntoWaves,
   resolveStartOrder,
+  transitiveDependents,
   type DependencyGraph,
 } from '../graph/resolver.js';
 import { createProbe, type HealthProbe } from '../health/checks.js';
@@ -15,6 +16,12 @@ import { getParser, type BuildEvent, type LineParser } from '../process/parsers.
 import { isActive, transition, type LifecycleEvent, type ProcessState } from './lifecycle.js';
 import { runHook, type HookKind } from './hooks.js';
 import { PreflightError, runPreflight, type PreflightResult } from './preflight.js';
+
+export interface BootSummary {
+  ready: string[];
+  failed: string[];
+  pending: string[];
+}
 
 export type OrckitEvents = {
   'preflight:start': [];
@@ -32,6 +39,7 @@ export type OrckitEvents = {
   'hook:start': [name: string, hook: HookKind];
   'hook:complete': [name: string, hook: HookKind];
   'hook:failed': [name: string, hook: HookKind, error: Error];
+  'boot:complete': [summary: BootSummary];
   'all:ready': [names: string[]];
 };
 
@@ -44,13 +52,20 @@ interface Handle {
   parser: LineParser | null;
   retries: number;
   shutdown: AbortController | null;
+  restartAbort: AbortController | null;
   startedAt: number | null;
+}
+
+export interface RestartOptions {
+  /** When true (default), also restart all transitive dependents of each target. */
+  cascade?: boolean;
 }
 
 export class Orckit extends EventEmitter<OrckitEvents> {
   private readonly graph: DependencyGraph;
   private readonly handles = new Map<string, Handle>();
   private stopping = false;
+  private inStartLoop = false;
 
   constructor(public readonly config: OrckitConfig) {
     super();
@@ -64,7 +79,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     return this.config.project;
   }
 
-  async start(targets?: string[]): Promise<void> {
+  async start(targets?: string[]): Promise<BootSummary> {
     if (this.config.preflight.length > 0) {
       await this.doPreflight();
     }
@@ -78,15 +93,41 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       .map((wave) => wave.filter((n) => required.has(n)))
       .filter((wave) => wave.length > 0);
 
-    for (const wave of waves) {
-      await Promise.all(wave.map((name) => this.startOne(name)));
+    this.inStartLoop = true;
+    try {
+      for (const wave of waves) {
+        const startable = wave.filter((name) => this.depsReady(name));
+        if (startable.length === 0) continue;
+        await Promise.allSettled(
+          startable.map((name) =>
+            this.startOne(name).catch(() => {
+              // failure already emitted via events; allSettled would have swallowed
+              // the rejection anyway, but the explicit .catch avoids unhandled-rejection
+              // warnings if anything upstream changes.
+            }),
+          ),
+        );
+      }
+    } finally {
+      this.inStartLoop = false;
     }
 
-    this.emit('all:ready', [...required]);
+    const summary = this.bootSummary(required);
+    this.emit('boot:complete', summary);
+    if (summary.failed.length === 0 && summary.pending.length === 0) {
+      this.emit('all:ready', summary.ready);
+    }
+    return summary;
   }
 
   async stop(targets?: string[]): Promise<void> {
     this.stopping = true;
+    // Cancel any pending auto-restart timers up-front so they don't try to revive
+    // processes while we're tearing down.
+    for (const handle of this.handles.values()) {
+      handle.restartAbort?.abort();
+    }
+
     const order = resolveStartOrder(this.graph);
     const toStop = targets && targets.length > 0 ? new Set(targets) : new Set(order);
     const reversed = [...order].reverse().filter((n) => toStop.has(n));
@@ -96,11 +137,50 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.stopping = false;
   }
 
-  async restart(targets: string[]): Promise<void> {
+  async restart(targets: string[], options: RestartOptions = {}): Promise<void> {
+    const cascade = options.cascade !== false;
+
+    const toRestart = new Set<string>();
     for (const name of targets) {
-      await this.stopOne(name);
-      await this.startOne(name);
+      if (!this.handles.has(name)) {
+        throw new Error(`unknown process "${name}"`);
+      }
+      toRestart.add(name);
+      if (cascade) {
+        for (const dep of transitiveDependents(this.graph, name)) {
+          toRestart.add(dep);
+        }
+      }
     }
+
+    // Cancel any pending auto-restart timers for the targets so manual retry
+    // doesn't race with the auto-retry that's already queued.
+    for (const name of toRestart) {
+      this.handles.get(name)!.restartAbort?.abort();
+    }
+
+    const order = resolveStartOrder(this.graph);
+    const stopOrder = [...order].reverse().filter((n) => toRestart.has(n));
+    const startOrder = order.filter((n) => toRestart.has(n));
+
+    for (const name of stopOrder) {
+      await this.stopOne(name);
+    }
+    this.inStartLoop = true;
+    try {
+      for (const name of startOrder) {
+        try {
+          await this.startOne(name);
+        } catch {
+          // failure already emitted; keep going so partial recovery still happens
+        }
+      }
+    } finally {
+      this.inStartLoop = false;
+    }
+
+    // Unblock anything else that was waiting on these.
+    this.kickPending();
   }
 
   state(name: string): ProcessState {
@@ -120,6 +200,41 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 
   // ------- internals -------
+
+  private bootSummary(required: ReadonlySet<string>): BootSummary {
+    const ready: string[] = [];
+    const failed: string[] = [];
+    const pending: string[] = [];
+    for (const name of required) {
+      const state = this.handles.get(name)!.state;
+      if (state === 'running' || state === 'ready') ready.push(name);
+      else if (state === 'failed') failed.push(name);
+      else if (state === 'pending') pending.push(name);
+    }
+    return { ready, failed, pending };
+  }
+
+  private depsReady(name: string): boolean {
+    const deps = this.graph.get(name) ?? [];
+    return deps.every((d) => {
+      const s = this.handles.get(d)?.state;
+      return s === 'ready' || s === 'running';
+    });
+  }
+
+  /**
+   * Start any pending process whose dependencies are now ready. Fire-and-forget.
+   * Skipped while a start/restart loop is driving startup itself — that loop
+   * awaits each child sequentially and would race with a kicked start.
+   */
+  private kickPending(): void {
+    if (this.inStartLoop) return;
+    for (const [name, handle] of this.handles) {
+      if (handle.state !== 'pending') continue;
+      if (!this.depsReady(name)) continue;
+      void this.startOne(name).catch(() => {});
+    }
+  }
 
   private async doPreflight(): Promise<void> {
     this.emit('preflight:start');
@@ -220,6 +335,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.emit('process:ready', name, Date.now() - (handle.startedAt ?? Date.now()));
     this.applyEvent(name, { kind: 'mark-running' });
     this.emit('process:running', name);
+    this.kickPending();
   }
 
   private async stopOne(name: string): Promise<void> {
@@ -257,9 +373,11 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     const expected = handle.state === 'stopping' || this.stopping;
     handle.runner = null;
     handle.probe = null;
-    this.applyEvent(name, { kind: 'exited', expected });
+    this.applyEvent(name, { kind: 'exited', expected, code });
     if (handle.state === 'stopped') {
       this.emit('process:stopped', name);
+      // A clean exit we didn't request still warrants a restart under `restart: always`.
+      if (!expected) void this.maybeRestart(name);
       return;
     }
     this.emit('process:failed', name, new Error(`exited (code ${code ?? '?'})`));
@@ -272,17 +390,26 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     if (!handle) return;
     const policy = handle.config.restart;
     if (policy === 'never') return;
+    if (policy === 'on-failure' && handle.state !== 'failed') return;
     if (handle.retries >= handle.config.max_retries) return;
 
     handle.retries++;
     this.emit('process:restarting', name, handle.retries);
-    await delay(handle.config.restart_delay_ms);
+
+    // Abortable delay so a manual restart can preempt the queued auto-retry.
+    const abort = new AbortController();
+    handle.restartAbort = abort;
+    try {
+      await delay(handle.config.restart_delay_ms, abort.signal);
+    } catch {
+      handle.restartAbort = null;
+      return;
+    }
+    handle.restartAbort = null;
+
     try {
       await this.spawnAndAwaitReady(name);
-      if (handle.state === 'ready') {
-        this.applyEvent(name, { kind: 'mark-running' });
-        this.emit('process:running', name);
-      }
+      this.kickPending();
     } catch {
       // failure already emitted; recursion via handleExit will retry if budget remains
     }
@@ -323,6 +450,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       parser: getParser(config.type),
       retries: 0,
       shutdown: null,
+      restartAbort: null,
       startedAt: null,
     };
   }
@@ -334,6 +462,20 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }

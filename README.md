@@ -153,11 +153,37 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `process:line` | `name`, `OutputLine` |
 | `process:build` | `name`, `BuildEvent` |
 | `hook:start` / `hook:complete` / `hook:failed` | `name`, `hook`, `Error?` |
-| `all:ready` | `names: string[]` |
+| `boot:complete` | `{ ready: string[], failed: string[], pending: string[] }` — always fires after `start()` |
+| `all:ready` | `names: string[]` — only fires when nothing failed and nothing pending |
 
 `ProcessState` values: `pending` → `starting` → `ready` → `running` → `stopping` → `stopped`/`failed`.
 
 The state machine is exported as a pure function (`transition(state, event)`) so it's trivial to test or reuse.
+
+### Interactive retry (`orc start` REPL)
+
+When `start()` finishes with at least one failed process, the orchestrator stays alive and dependents of the failed process(es) stay `pending`. `orc start` opens a REPL prompt on stdin (if it's a TTY) so you can fix the underlying issue and retry without restarting the whole stack:
+
+```
+1 ready  1 failed (api)  1 pending (web)
+type `r api` to retry, ? for help
+> r api
+  ↻ api restarting (manual)
+  ✓ api ready (812ms)
+  ⠋ web starting          ← auto-unblocked once api was ready
+  ✓ web ready (1.2s)
+>
+```
+
+| input | meaning |
+|---|---|
+| `r [name ...]` | retry failed processes; cascade to dependents (default) |
+| `r! [name ...]` | retry without cascading to dependents |
+| `s` | print current status table |
+| `q` | quit (same as Ctrl-C) |
+| `?` / `h` | help |
+
+Cascade restart replays a process **and all of its transitive dependents** in dependency order — the common case when an upstream service has restarted and downstream connections need to be refreshed. Pass `--no-repl` to `orc start` to suppress the prompt entirely. Programmatically: `orckit.restart(['api'], { cascade: true })`.
 
 ## Development
 

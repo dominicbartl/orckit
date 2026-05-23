@@ -1,0 +1,45 @@
+project: manual-retry
+
+# `flaky` exits non-zero unless /tmp/orckit-demo-flag exists.
+# `dependent` depends on it and prints a message.
+#
+# Run, watch flaky exhaust its retries and end up `failed` with `dependent`
+# stuck `pending`. Then in another terminal:
+#
+#     touch /tmp/orckit-demo-flag
+#
+# and at the orckit prompt type:
+#
+#     r flaky
+#
+# flaky comes up; cascade restart unblocks dependent automatically.
+
+processes:
+  flaky:
+    command: |
+      if [ -f /tmp/orckit-demo-flag ]; then
+        echo "service started"
+        trap 'echo "shutting down"; exit 0' TERM
+        while true; do sleep 1; done
+      else
+        echo "missing /tmp/orckit-demo-flag — touch it then \`r flaky\` at the prompt"
+        exit 1
+      fi
+    ready:
+      type: log-pattern
+      pattern: 'service started'
+      timeout_ms: 5000
+    restart: on-failure
+    restart_delay_ms: 1500
+    max_retries: 2
+
+  dependent:
+    command: |
+      echo "dependent online"
+      trap 'exit 0' TERM
+      while true; do sleep 1; done
+    depends_on: [flaky]
+    ready:
+      type: log-pattern
+      pattern: 'dependent online'
+      timeout_ms: 5000

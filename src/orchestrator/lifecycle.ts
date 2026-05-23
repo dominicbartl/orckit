@@ -12,7 +12,7 @@ export type LifecycleEvent =
   | { kind: 'ready' }
   | { kind: 'mark-running' }
   | { kind: 'stop-requested' }
-  | { kind: 'exited'; expected: boolean }
+  | { kind: 'exited'; expected: boolean; code: number | null }
   | { kind: 'fail' };
 
 export class IllegalTransitionError extends Error {
@@ -42,6 +42,9 @@ export function transition(state: ProcessState, event: LifecycleEvent): ProcessS
     case 'exited':
       if (state === 'stopping') return 'stopped';
       if (event.expected && (state === 'ready' || state === 'running')) return 'stopped';
+      // Clean exit (code 0) from an active process is a clean completion, not a failure.
+      // Restart policy still applies in the orchestrator (`always` will restart even on stop).
+      if (event.code === 0 && (state === 'ready' || state === 'running')) return 'stopped';
       return 'failed';
     case 'fail':
       if (state === 'stopping' || state === 'stopped') return state;

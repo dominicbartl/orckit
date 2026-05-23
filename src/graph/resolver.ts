@@ -93,6 +93,26 @@ export function transitiveDependencies(graph: DependencyGraph, name: string): Se
   return visited;
 }
 
+export function transitiveDependents(graph: DependencyGraph, name: string): Set<string> {
+  if (!graph.has(name)) {
+    throw new DependencyError(`unknown process "${name}"`);
+  }
+  const reverse = new Map<string, string[]>();
+  for (const n of graph.keys()) reverse.set(n, []);
+  for (const [n, deps] of graph) {
+    for (const d of deps) reverse.get(d)!.push(n);
+  }
+  const visited = new Set<string>();
+  const stack = [...(reverse.get(name) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    stack.push(...(reverse.get(current) ?? []));
+  }
+  return visited;
+}
+
 export function filterToTargets(graph: DependencyGraph, targets: string[]): Set<string> {
   const required = new Set<string>();
   for (const name of targets) {

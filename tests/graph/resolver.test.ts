@@ -6,6 +6,7 @@ import {
   groupIntoWaves,
   resolveStartOrder,
   transitiveDependencies,
+  transitiveDependents,
   visualize,
 } from '../../src/graph/resolver.js';
 import type { OrckitConfig } from '../../src/config/schema.js';
@@ -94,6 +95,28 @@ describe('transitiveDependencies', () => {
   it('rejects unknown processes', () => {
     const graph = buildGraph(configWith({ a: [] }));
     expect(() => transitiveDependencies(graph, 'ghost')).toThrow(DependencyError);
+  });
+});
+
+describe('transitiveDependents', () => {
+  it('returns all downstream nodes', () => {
+    const graph = buildGraph(configWith({ a: [], b: ['a'], c: ['b'], d: ['c'] }));
+    expect([...transitiveDependents(graph, 'a')].sort()).toEqual(['b', 'c', 'd']);
+  });
+
+  it('returns empty set for leaf nodes', () => {
+    const graph = buildGraph(configWith({ a: [], b: ['a'] }));
+    expect([...transitiveDependents(graph, 'b')]).toEqual([]);
+  });
+
+  it('handles branching dependencies', () => {
+    const graph = buildGraph(configWith({ db: [], api: ['db'], worker: ['db'], web: ['api'] }));
+    expect([...transitiveDependents(graph, 'db')].sort()).toEqual(['api', 'web', 'worker']);
+  });
+
+  it('rejects unknown processes', () => {
+    const graph = buildGraph(configWith({ a: [] }));
+    expect(() => transitiveDependents(graph, 'ghost')).toThrow(DependencyError);
   });
 });
 

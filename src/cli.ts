@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { loadConfig, ConfigError } from './config/load.js';
 import { Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
+import { attachRepl, type Repl } from './reporter/repl.js';
 import { buildGraph, visualize } from './graph/resolver.js';
 
 const program = new Command()
@@ -58,15 +59,22 @@ program
   .option('-c, --config <path>', 'config file path', './orckit.yaml')
   .option('--show-output', 'stream process stdout/stderr to terminal', false)
   .option('--show-build', 'show build events (webpack/angular)', false)
+  .option('--no-repl', 'disable the interactive command prompt')
   .action(
     async (
       processes: string[],
-      opts: { config: string; showOutput: boolean; showBuild: boolean },
+      opts: { config: string; showOutput: boolean; showBuild: boolean; repl: boolean },
     ) => {
       try {
         const config = loadConfig(opts.config);
         const orckit = new Orckit(config);
-        attachCliReporter(orckit, { showOutput: opts.showOutput, showBuild: opts.showBuild });
+
+        let repl: Repl | null = null;
+        attachCliReporter(orckit, {
+          showOutput: opts.showOutput,
+          showBuild: opts.showBuild,
+          printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
+        });
 
         const targets = processes.length > 0 ? processes : undefined;
         await orckit.start(targets);
@@ -76,12 +84,39 @@ program
           if (shuttingDown) return;
           shuttingDown = true;
           console.log(chalk.yellow(`\n  received ${signal}, stopping...`));
+          repl?.detach();
           await orckit.dispose();
           console.log(renderStatus(orckit.states()));
           process.exit(0);
         };
         process.on('SIGINT', () => void shutdown('SIGINT'));
         process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+        if (opts.repl) {
+          repl = attachRepl({
+            retry: async (givenTargets, cascade) => {
+              const states = orckit.states();
+              const failed = [...states].filter(([, s]) => s === 'failed').map(([n]) => n);
+              const targets = givenTargets.length > 0 ? givenTargets : failed;
+              if (targets.length === 0) {
+                console.log(chalk.dim('  nothing to retry'));
+                return;
+              }
+              for (const name of targets) {
+                if (!states.has(name)) {
+                  console.log(chalk.yellow(`  unknown process "${name}"`));
+                  return;
+                }
+              }
+              await orckit.restart(targets, { cascade });
+            },
+            status: () => {
+              console.log('');
+              console.log(renderStatus(orckit.states()));
+            },
+            quit: () => shutdown('user quit'),
+          });
+        }
 
         await new Promise(() => {
           /* keep alive until signal */

@@ -27,15 +27,31 @@ describe('transition', () => {
   });
 
   it('stopping → stopped on exited', () => {
-    expect(transition('stopping', { kind: 'exited', expected: false })).toBe('stopped');
+    expect(transition('stopping', { kind: 'exited', expected: false, code: 1 })).toBe('stopped');
   });
 
-  it('running → failed on unexpected exit', () => {
-    expect(transition('running', { kind: 'exited', expected: false })).toBe('failed');
+  it('running → failed on unexpected non-zero exit', () => {
+    expect(transition('running', { kind: 'exited', expected: false, code: 1 })).toBe('failed');
+  });
+
+  it('running → failed on unexpected signal exit (code null)', () => {
+    expect(transition('running', { kind: 'exited', expected: false, code: null })).toBe('failed');
   });
 
   it('running → stopped on expected exit', () => {
-    expect(transition('running', { kind: 'exited', expected: true })).toBe('stopped');
+    expect(transition('running', { kind: 'exited', expected: true, code: 0 })).toBe('stopped');
+  });
+
+  it('running → stopped on clean exit (code 0) even when unexpected', () => {
+    expect(transition('running', { kind: 'exited', expected: false, code: 0 })).toBe('stopped');
+  });
+
+  it('ready → stopped on clean exit (code 0) even when unexpected', () => {
+    expect(transition('ready', { kind: 'exited', expected: false, code: 0 })).toBe('stopped');
+  });
+
+  it('starting → failed on exit (even with code 0)', () => {
+    expect(transition('starting', { kind: 'exited', expected: false, code: 0 })).toBe('failed');
   });
 
   it('can restart from failed', () => {

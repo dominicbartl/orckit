@@ -80,8 +80,18 @@ running ──(SIGTERM/SIGKILL via dispose)────────────�
 
 - `exit-code` ready checks: spawn → await exit → if 0, ready+running (process is gone but state stays "running" to satisfy downstream deps).
 - Long-running with health probe: spawn → race(`waitForReady(probe)`, `runner.exit`) → ready+running; if exit wins, fail.
-- Unexpected exit while `running`: fail → maybe restart per policy with `restart_delay_ms` and `max_retries`.
+- Unexpected exit while `running`: fail → maybe restart per policy with `restart_delay_ms` and `max_retries`. The auto-restart delay is wrapped in an `AbortController` stored on the handle so a manual `restart()` can preempt it.
 - Explicit `stop()`: pre_stop hook → SIGTERM → grace → SIGKILL → post_stop hook → emit stopped.
+
+### Partial boot + manual retry
+
+`Orckit.start()` uses `Promise.allSettled` per wave and **never throws on per-process failure**. It returns a `BootSummary` and emits `boot:complete: { ready, failed, pending }`. Processes whose deps failed stay `pending`. `all:ready` only fires when everything succeeded.
+
+`Orckit.restart(targets, { cascade = true })` stops then re-starts the listed processes and (by default) all their transitive dependents in dependency order. After the restart loop, `kickPending()` walks pending processes and starts any whose deps have become ready — that's how a successful manual retry unblocks the downstream chain that was waiting on it.
+
+`kickPending` is suppressed while `inStartLoop` is true (during initial boot AND during `restart()`'s start loop), so the wave/loop driver doesn't race a fire-and-forget kick on the same process.
+
+The interactive REPL in `src/cli.ts` (`reporter/repl.ts`) is the user-facing surface: typing `r backend` calls `restart(['backend'], { cascade: true })`. It attaches to stdin only when stdin is a TTY and `--no-repl` was not passed.
 
 ## Adding a new feature
 

@@ -118,6 +118,64 @@ describe('Orckit end-to-end', () => {
     expect(orckit.state('srv')).toBe('running');
   });
 
+  it('treats a clean exit (code 0) after ready as stopped, not failed', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        worker: {
+          command: 'echo ready && sleep 0.1 && echo done',
+          ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 3000 },
+          restart: 'on-failure',
+        },
+      }),
+    );
+    const restarts: number[] = [];
+    orckit.on('process:restarting', (_n, attempt) => restarts.push(attempt));
+    await orckit.start();
+    // Wait for the natural exit
+    await new Promise((r) => setTimeout(r, 500));
+    expect(orckit.state('worker')).toBe('stopped');
+    expect(restarts).toEqual([]);
+  });
+
+  it('still restarts on clean exit under restart: always', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        worker: {
+          command: 'echo ready && sleep 0.1',
+          ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 3000 },
+          restart: 'always',
+          restart_delay_ms: 50,
+          max_retries: 2,
+        },
+      }),
+    );
+    const restarts: number[] = [];
+    orckit.on('process:restarting', (_n, attempt) => restarts.push(attempt));
+    await orckit.start();
+    // Wait long enough for the natural exits + restart attempts to play out
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(restarts.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still restarts on non-zero exit under restart: on-failure', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        crash: {
+          command: 'echo ready && sleep 0.1 && exit 7',
+          ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 3000 },
+          restart: 'on-failure',
+          restart_delay_ms: 50,
+          max_retries: 2,
+        },
+      }),
+    );
+    const restarts: number[] = [];
+    orckit.on('process:restarting', (_n, attempt) => restarts.push(attempt));
+    await orckit.start();
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(restarts.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('reports failure when the process exits during health check', async () => {
     orckit = new Orckit(
       makeConfig({
@@ -133,7 +191,8 @@ describe('Orckit end-to-end', () => {
         },
       }),
     );
-    await expect(orckit.start()).rejects.toThrow();
+    const summary = await orckit.start();
+    expect(summary.failed).toEqual(['flaky']);
     expect(orckit.state('flaky')).toBe('failed');
   });
 
