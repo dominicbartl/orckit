@@ -1,376 +1,177 @@
 # Orckit
 
-> Process orchestration tool for local development environments with tmux integration
+A lean CLI for orchestrating multiple processes in local development. Think a single-binary, opinionated replacement for a handful of shell scripts plus `tmux` plus `wait-on`.
 
-[![npm version](https://img.shields.io/npm/v/@orckit/cli.svg)](https://www.npmjs.com/package/@orckit/cli)
-[![CI](https://github.com/dominicbartl/orckit/workflows/CI/badge.svg)](https://github.com/dominicbartl/orckit/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/dominicbartl/orckit/branch/main/graph/badge.svg)](https://codecov.io/gh/dominicbartl/orckit)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/node/v/@orckit/cli)](https://nodejs.org)
+It takes a YAML file describing your processes, their dependencies, and how to know they're ready — then starts them in the right order, watches for failures, restarts on policy, and tears everything down cleanly on Ctrl-C.
 
-Orckit is a powerful CLI tool for managing complex local development environments. It orchestrates multiple processes with dependency management, health checks, and beautiful tmux-based monitoring.
-
-## Features
-
-- **Dependency Management**: Define startup order with automatic dependency resolution
-- **Health Checks**: HTTP, TCP, log pattern, and custom ready checks
-- **tmux Integration**: Beautiful themed tmux sessions with process categorization
-- **Output Filtering**: Suppress noise and highlight important log patterns
-- **Pre/Post Hooks**: Run commands before and after process lifecycle events
-- **Deep Build Integration**: Direct integration with Webpack, Angular CLI, and Vite
-- **Programmatic API**: Control processes from TypeScript/JavaScript
-- **Auto-Restart**: Configurable restart policies for failed processes
-- **Preflight Checks**: Validate environment before starting processes
-- **Creative Boot Logging**: Multiple boot visualization styles
-
-## Installation
+## Install
 
 ```bash
-# Using pnpm
-pnpm add -g @orckit/cli
-
-# Using npm
-npm install -g @orckit/cli
-
-# Using yarn
-yarn global add @orckit/cli
+pnpm add -D @orckit/cli
+# or
+npm i -D @orckit/cli
 ```
 
-## Quick Start
+Requires Node 20+.
 
-1. Create an `orckit.yaml` configuration file:
+## Quick start
+
+Create `orckit.yaml` in your project:
 
 ```yaml
-version: "1"
-project: "my-app"
+project: my-app
 
 processes:
-  api:
-    category: backend
-    command: "npm run dev"
-    cwd: "./api"
-    ready:
-      type: http
-      url: "http://localhost:3000/health"
-
-  frontend:
-    category: frontend
-    command: "npm start"
-    cwd: "./web"
-    dependencies: [api]
-    ready:
-      type: log-pattern
-      pattern: "Compiled successfully"
-```
-
-2. Start your processes:
-
-```bash
-orc start
-```
-
-3. View status:
-
-```bash
-orc status
-orc list
-```
-
-## CLI Commands
-
-### `orc start [processes...]`
-
-Start all processes or specific processes.
-
-```bash
-orc start                    # Start all processes
-orc start api frontend       # Start specific processes
-orc start -c config.yaml     # Use custom config file
-```
-
-### `orc stop [processes...]`
-
-Stop running processes.
-
-```bash
-orc stop                     # Stop all processes
-orc stop api                 # Stop specific process
-```
-
-### `orc restart <processes...>`
-
-Restart one or more processes.
-
-```bash
-orc restart api
-orc restart api frontend
-```
-
-### `orc status`
-
-Show status of all processes.
-
-```bash
-orc status
-```
-
-### `orc list`
-
-List all defined processes with their configuration.
-
-```bash
-orc list
-```
-
-### `orc validate`
-
-Validate configuration file and show dependency graph.
-
-```bash
-orc validate
-orc validate -c config.yaml
-```
-
-### `orc logs <process>`
-
-View logs for a specific process.
-
-```bash
-orc logs api
-orc logs api --follow        # Follow log output
-```
-
-### `orc attach <process>`
-
-Attach to a process's tmux pane.
-
-```bash
-orc attach api
-```
-
-## Configuration
-
-See [docs/configuration.md](docs/configuration.md) for complete configuration reference.
-
-### Process Types
-
-- `bash` - Shell commands and scripts
-- `docker` - Docker containers
-- `node` - Node.js applications
-- `ts-node` - TypeScript applications
-- `webpack` - Webpack builds with deep integration
-- `angular` - Angular CLI with deep integration
-- `vite` - Vite dev server
-- `build` - Generic build processes
-
-### Ready Checks
-
-- **HTTP**: Wait for HTTP endpoint to return expected status
-- **TCP**: Wait for TCP port to be available
-- **Exit Code**: Wait for command to exit with code 0
-- **Log Pattern**: Wait for specific pattern in logs
-- **Custom**: Run custom command to check readiness
-
-### Example Configuration
-
-```yaml
-version: "1"
-project: "full-stack-app"
-
-categories:
-  infrastructure:
-    window: "infra"
-  backend:
-    window: "backend"
-  frontend:
-    window: "frontend"
-
-processes:
-  postgres:
-    category: infrastructure
-    type: docker
-    command: "docker run --rm -p 5432:5432 postgres:15"
+  db:
+    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
     ready:
       type: tcp
-      host: localhost
       port: 5432
 
   api:
-    category: backend
-    command: "npm run dev"
-    dependencies: [postgres]
-    env:
-      DATABASE_URL: "postgresql://localhost:5432/myapp"
+    command: npm run dev
+    cwd: ./api
+    depends_on: [db]
     ready:
       type: http
-      url: "http://localhost:3000/health"
+      url: http://localhost:3000/health
     hooks:
-      pre_start: "npm install"
-    output:
-      filter:
-        highlight_patterns:
-          - pattern: "ERROR"
-            color: "red"
-    restart: on-failure
+      pre_start: npm install
+```
+
+Then:
+
+```bash
+npx orc validate          # check config + print dependency graph
+npx orc list              # list processes
+npx orc start             # boot everything in dependency order
+npx orc start api         # boot just api (and its deps)
+npx orc start --show-output  # also stream stdout/stderr to the terminal
+```
+
+Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
+
+## Configuration reference
+
+```yaml
+project: my-project          # optional, used in CLI output
+
+preflight:                   # optional pre-startup checks (run in parallel)
+  - name: docker-up
+    command: docker info >/dev/null
+    on_fail: start Docker Desktop
+
+processes:
+  <name>:
+    type: bash | webpack | angular   # default: bash
+    command: <shell command>          # required
+    cwd: <path>                       # default: current dir
+    category: <string>                # cosmetic grouping; default: 'default'
+    env: { KEY: value }
+    depends_on: [other-process-name, ...]
+
+    ready:                            # optional; without it the process is "ready" as soon as it spawns
+      type: http
+      url: http://localhost:3000/health
+      expected_status: 200            # default: 200
+      interval_ms: 1000               # default: 1000
+      timeout_ms: 60000               # default: 60000
+    # or
+      type: tcp
+      host: localhost                 # default: localhost
+      port: 5432
+      timeout_ms: 30000
+    # or
+      type: log-pattern
+      pattern: 'Compiled successfully'
+      timeout_ms: 60000
+    # or
+      type: exit-code                 # one-shot: process must exit 0 to be "ready"
+      timeout_ms: 60000
+    # or
+      type: custom
+      command: 'curl -fsS localhost:3000/ready'
+
+    restart: on-failure | always | never  # default: on-failure
+    restart_delay_ms: 2000
     max_retries: 3
 
-  webpack:
-    category: frontend
-    type: webpack
-    command: "npm run build:watch"
-    dependencies: [api]
-    integration:
-      mode: deep
+    hooks:
+      pre_start: 'npm install'
+      post_start: 'echo ready'
+      pre_stop: 'echo stopping'
+      post_stop: 'echo stopped'
+
+    output:
+      suppress: ['^node_modules', 'webpack-dev-middleware']  # regex; matches are dropped
+      include: ['^ERROR']                                    # regex; ONLY matches are kept (if set)
+      highlight:
+        - pattern: 'ERROR'
+          color: red
+
+    buffer_size: 1000   # in-memory output lines kept per process; default 1000
 ```
+
+### Process types
+
+- **bash** — default. Runs the command via `bash -c`.
+- **webpack** — same as bash, plus a stdout parser that emits `build:start` / `build:progress` / `build:complete` / `build:failed` events on standard webpack output.
+- **angular** — same as bash, plus an Angular CLI output parser.
+
+The parsers are best-effort regex against modern tool output and exist purely so the CLI reporter can show useful build status. If you don't care about that, just use `bash`.
 
 ## Programmatic API
 
-Use Orckit from TypeScript/JavaScript:
+```ts
+import { Orckit, loadConfig } from '@orckit/cli';
 
-```typescript
-import { Orckit } from '@orckit/cli';
+const orckit = new Orckit(loadConfig('./orckit.yaml'));
 
-const orckit = new Orckit({
-  configPath: './orckit.yaml'
-});
+orckit.on('process:ready', (name, ms) => console.log(`${name} ready in ${ms}ms`));
+orckit.on('process:failed', (name, err) => console.error(`${name} failed`, err));
 
-// Listen to events
-orckit.on('process:starting', (event) => {
-  console.log(`Starting ${event.processName}...`);
-});
+await orckit.start(['api']);   // starts api + its deps
+console.log(orckit.states());  // Map<name, ProcessState>
 
-orckit.on('process:ready', (event) => {
-  console.log(`${event.processName} is ready!`);
-});
-
-orckit.on('build:progress', (event) => {
-  console.log(`Building ${event.processName}: ${event.progress}%`);
-});
-
-// Start processes
-await orckit.start();
-
-// Control processes
-await orckit.stop(['api']);
-await orckit.restart(['frontend']);
-
-// Query status
-const status = orckit.getStatus('api');
-const allStatuses = orckit.getStatus();
-
-// Wait for process
-const isReady = await orckit.waitForReady('api', { timeout: 30000 });
-
-// Dynamic management
-orckit.addProcess('worker', {
-  category: 'backend',
-  command: 'node worker.js',
-});
+await orckit.dispose();        // stop everything in reverse dependency order
 ```
 
-## Build Tool Plugins
+### Events
 
-### Webpack Plugin
+| Event | Payload |
+|---|---|
+| `preflight:start` | — |
+| `preflight:result` | `PreflightResult` |
+| `preflight:complete` | `allPassed: boolean` |
+| `process:state` | `name`, `ProcessState` |
+| `process:starting` | `name` |
+| `process:ready` | `name`, `durationMs` |
+| `process:running` | `name` |
+| `process:stopped` | `name` |
+| `process:failed` | `name`, `Error?` |
+| `process:restarting` | `name`, `attempt` |
+| `process:line` | `name`, `OutputLine` |
+| `process:build` | `name`, `BuildEvent` |
+| `hook:start` / `hook:complete` / `hook:failed` | `name`, `hook`, `Error?` |
+| `all:ready` | `names: string[]` |
 
-```javascript
-// webpack.config.js
-import { MaestroWebpackPlugin } from '@orckit/cli/webpack';
+`ProcessState` values: `pending` → `starting` → `ready` → `running` → `stopping` → `stopped`/`failed`.
 
-export default {
-  plugins: [
-    new MaestroWebpackPlugin({
-      maestroConfig: './orckit.yaml',
-      processName: 'webpack',
-      waitFor: ['api']
-    })
-  ]
-};
-```
-
-### Vite Plugin
-
-```typescript
-// vite.config.ts
-import { maestro } from '@orckit/cli/vite';
-
-export default defineConfig({
-  plugins: [
-    maestro({
-      configPath: './orckit.yaml',
-      processName: 'vite',
-      startDependencies: true
-    })
-  ]
-});
-```
-
-## Documentation
-
-### Guides
-
-- [Tmux Integration Guide](TMUX_INTEGRATION.md) - **NEW!** Complete guide to tmux integration and window switching
-- [Debug Logging Guide](DEBUG_LOGGING.md) - Enable debug mode to see what's happening
-- [Port Checking Guide](PORT_CHECKING.md) - Understanding port conflicts and resolution
-
-### Reference Documentation
-
-- [Getting Started](docs/getting-started.md)
-- [Configuration Reference](docs/configuration.md)
-- [Process Types](docs/process-types.md)
-- [Health Checks](docs/health-checks.md)
-- [Hooks](docs/hooks.md)
-- [Output Filtering](docs/output-filtering.md)
-- [CLI Reference](docs/cli-reference.md)
-- [Programmatic API](docs/programmatic-api.md)
-- [Build Integration](docs/build-integration.md)
-- [Troubleshooting](docs/troubleshooting.md)
-
-## Examples
-
-See the [examples/](examples/) directory for complete examples:
-
-- [simple.yaml](examples/simple.yaml) - Full-stack application
-- [minimal.yaml](examples/minimal.yaml) - Minimal setup
+The state machine is exported as a pure function (`transition(state, event)`) so it's trivial to test or reuse.
 
 ## Development
 
 ```bash
-# Clone repository
-git clone https://github.com/orckit/cli.git
-cd cli
-
-# Install dependencies
 pnpm install
-
-# Build
+pnpm typecheck
+pnpm test             # all tests
+pnpm test:unit        # everything except integration
+pnpm test:integration # spawns real bash processes
 pnpm build
-
-# Run tests
-pnpm test
-
-# Watch mode
-pnpm dev
 ```
 
-## Requirements
-
-- Node.js >= 18.0.0
-- tmux (for session management)
-- Docker (if using Docker processes)
+Architecture lives in [CLAUDE.md](CLAUDE.md). The TL;DR: each `src/` subdirectory has a single concern; every module is independently testable; no inheritance in the runner; the schema is the single source of truth for types.
 
 ## License
 
-MIT © Dominic Bartl
-
-## Contributing
-
-Contributions are welcome! Please read our [contributing guidelines](CONTRIBUTING.md) first.
-
-## Support
-
-- [GitHub Issues](https://github.com/orckit/cli/issues)
-- [Documentation](docs/)
-
----
-
-Made with ❤️ for developers who juggle multiple services
+MIT

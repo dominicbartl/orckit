@@ -1,22 +1,25 @@
-version: "1"
-project: "counter-example"
-
-categories:
-  counters:
-    window: "Counters"
+project: counter
 
 processes:
-  counter:
+  ticker:
     category: counters
     command: |
-      for i in {1..30000000}; do
-        printf '\e[32m✓ Counter 1:\e[0m \e[1;36m%d\e[0m\n' $i
+      for i in $(seq 1 60); do
+        printf 'tick %d\n' "$i"
         sleep 1
       done
-  counter2:
+    ready:
+      type: log-pattern
+      pattern: 'tick 1'
+
+  tocker:
     category: counters
     command: |
-      for i in {1..30000000}; do
-        printf '\e[35m★ Counter 2:\e[0m \e[1;33m%d\e[0m\n' $i
+      for i in $(seq 1 30); do
+        printf 'tock %d\n' "$i"
         sleep 2
       done
+    depends_on: [ticker]
+    ready:
+      type: log-pattern
+      pattern: 'tock 1'

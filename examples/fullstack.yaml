@@ -1,0 +1,64 @@
+project: fullstack-demo
+
+preflight:
+  - name: node-installed
+    command: command -v node >/dev/null
+    on_fail: install Node.js 20+
+
+processes:
+  postgres:
+    category: infra
+    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
+    ready:
+      type: tcp
+      port: 5432
+      timeout_ms: 30000
+
+  redis:
+    category: infra
+    command: docker run --rm -p 6379:6379 redis:7
+    ready:
+      type: tcp
+      port: 6379
+      timeout_ms: 30000
+
+  api:
+    category: backend
+    command: npm run dev
+    cwd: ./api
+    depends_on: [postgres, redis]
+    env:
+      NODE_ENV: development
+      PORT: '3000'
+      DATABASE_URL: postgresql://postgres:dev@localhost:5432/myapp
+      REDIS_URL: redis://localhost:6379
+    ready:
+      type: http
+      url: http://localhost:3000/health
+      timeout_ms: 60000
+    hooks:
+      pre_start: npm install
+    output:
+      highlight:
+        - pattern: ERROR|Error
+          color: red
+        - pattern: WARN
+          color: yellow
+    restart: on-failure
+    max_retries: 3
+
+  web:
+    category: frontend
+    type: webpack
+    command: npm run dev
+    cwd: ./web
+    depends_on: [api]
+    env:
+      API_URL: http://localhost:3000
+    ready:
+      type: log-pattern
+      pattern: compiled successfully
+      timeout_ms: 120000
+    output:
+      suppress:
+        - 'node_modules'

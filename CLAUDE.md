@@ -1,578 +1,111 @@
-# CLAUDE.md - Orckit Architecture & Implementation Guide
+# CLAUDE.md — Orckit Architecture Guide
 
-This document provides comprehensive context about the Orckit project for AI assistants and developers.
+This file orients agents and contributors. Read [README.md](README.md) for the user-facing pitch and config reference.
 
-## Project Overview
+## What this is
 
-**Orckit** (`@orckit/cli`) is a CLI tool for orchestrating multiple processes in local development environments. Think of it as a local alternative to docker-compose or Kubernetes, optimized for development workflows with superior visibility through tmux integration.
+A lean CLI process orchestrator. It takes a YAML config, builds a dependency graph of processes, starts them in topological order (parallel within waves), watches health checks for readiness, forwards output, applies restart policies, and tears everything down on signal.
 
-### Key Concepts
+It is **not** a tmux integration, a dashboard UI, a build-tool plugin host, a daemon, or a resource monitor. Past iterations had all of those; they were dropped in the 0.2 rewrite. If you find yourself adding one, build it as a separate package that consumes the orchestrator via its event API.
 
-1. **Process Orchestration**: Manages lifecycle of multiple processes (start, stop, restart, health monitoring)
-2. **Dependency Management**: Uses topological sorting to determine correct startup order
-3. **Health Checks**: Multiple strategies to determine when processes are ready
-4. **tmux Integration**: Processes run in organized tmux panes with beautiful themes
-5. **Output Management**: Smart filtering and formatting of process logs
-6. **Build Tool Integration**: Deep integration with Webpack, Angular CLI, and Vite
-
-## Architecture
-
-### Directory Structure
+## Repository layout
 
 ```
 src/
-├── cli/              # CLI entry point and commands
-│   └── index.ts      # Commander-based CLI
-├── core/             # Core orchestration logic
-│   ├── config/       # Configuration parsing and validation
-│   │   ├── schema.ts # Zod schemas
-│   │   └── parser.ts # YAML parsing
-│   ├── dependency/   # Dependency resolution
-│   │   └── resolver.ts # Topological sort
-│   ├── health/       # Health check system
-│   │   └── checker.ts # HTTP, TCP, log pattern checkers
-│   ├── process/      # Process lifecycle management
-│   ├── tmux/         # tmux session management
-│   └── orckit.ts     # Main orchestrator class (API)
-├── runners/          # Process type implementations
-│   ├── base.ts       # Base runner class
-│   ├── bash.ts       # Bash/shell runner
-│   ├── docker.ts     # Docker container runner
-│   ├── node.ts       # Node.js runner
-│   ├── webpack.ts    # Webpack with deep integration
-│   ├── angular.ts    # Angular CLI with deep integration
-│   └── vite.ts       # Vite runner
-├── utils/            # Utility functions
-│   ├── logger.ts     # Output filtering and formatting
-│   └── system.ts     # System utilities
-├── types/            # TypeScript type definitions
-│   └── index.ts      # All type exports
-├── plugins/          # Build tool plugins
-│   ├── webpack.ts    # Webpack plugin
-│   ├── angular.ts    # Angular builder
-│   └── vite.ts       # Vite plugin
-└── index.ts          # Main export for programmatic API
+  cli.ts              # CLI entry — Commander commands, signal handling
+  index.ts            # Library exports
+
+  config/
+    schema.ts         # Zod schemas — SINGLE source of truth for config types
+    load.ts           # YAML → validated config
+    duration.ts       # parseDuration / formatDuration helpers
+
+  graph/
+    resolver.ts       # buildGraph, resolveStartOrder (Kahn), groupIntoWaves,
+                      # transitiveDependencies, filterToTargets, visualize
+
+  health/
+    checks.ts         # HttpProbe, TcpProbe, LogPatternProbe, CustomProbe
+    wait.ts           # waitForReady polling loop with abort support
+
+  process/
+    runner.ts         # Single Runner class; subprocess + line-buffered I/O
+    parsers.ts        # Pure (line) => BuildEvent | null parsers
+    output.ts         # OutputBuffer with suppress/include/highlight filters
+
+  orchestrator/
+    lifecycle.ts      # Pure state machine: transition(state, event) → state
+    hooks.ts          # runHook(kind, hooks, ctx)
+    preflight.ts      # runPreflight([{name, command, on_fail}])
+    orchestrator.ts   # Orckit class — coordinates everything, emits events
+
+  reporter/
+    cli-reporter.ts   # Subscribes to Orckit events, writes to console
+    debug.ts          # Minimal namespaced logger (ORCKIT_DEBUG=ns1,ns2)
+
+  util/
+    env.ts            # mergeEnv (process.env + extras)
+    port.ts           # isPortFree
+
+tests/
+  config/  graph/  health/  process/  orchestrator/  util/    # unit tests
+  integration/                                                # end-to-end
 ```
 
-### Core Components
+Every file has one responsibility. There are no 3-file modules masquerading as one concept.
 
-#### 1. Configuration System (src/core/config/)
+## Key design rules
 
-**Purpose**: Parse and validate YAML configuration files
+1. **Schema is the source of truth for types.** Every config type comes from `z.infer<typeof someSchema>` in `src/config/schema.ts`. Do not declare a parallel `interface` for config shapes anywhere else.
+2. **No runner inheritance.** There is one `Runner` class. Tool-specific behavior is a pure function in `process/parsers.ts` selected by `getParser(type)`. Adding a new build tool = adding one parser function + one case in `getParser`.
+3. **Lifecycle is a pure state machine.** `transition(state, event)` in `orchestrator/lifecycle.ts` has zero side effects. The orchestrator threads side effects (event emission, runner control) around it. Test the machine in isolation; trust it everywhere else.
+4. **Orchestrator emits events; reporter renders.** Don't `console.log` from `orchestrator/*` or `process/*`. The CLI reporter (or any consumer) listens and decides what to display. Tests assert against events, not stdout.
+5. **No singletons, no module-level mutable state.** The debug logger reads env once at import; everything else is per-instance.
+6. **Stop with grace.** `Runner.stop(graceMs)` sends SIGTERM via tree-kill, waits, escalates to SIGKILL. The orchestrator stops processes in reverse dependency order.
+7. **Tests adjacent to source.** `tests/<area>/<file>.test.ts` mirrors `src/<area>/<file>.ts`. Unit tests for pure code; integration tests (in `tests/integration/`) spawn real bash processes through the full `Orckit` API.
 
-**Key Files**:
-- `schema.ts`: Zod validation schemas for type-safe configuration
-- `parser.ts`: YAML parsing and helper functions
+## Process lifecycle in detail
 
-**Configuration Structure**:
-```yaml
-version: "1"
-project: "name"
-categories: {}        # tmux window organization
-processes: {}         # Process definitions
-hooks: {}            # Global hooks
-preflight: {}        # Preflight checks
-maestro: {}          # Boot configuration
+```
+                ┌──> ready ──> running ────────┐
+pending ──> starting                            ├──> stopping ──> stopped
+                └──> failed <──── exit/timeout ─┘                  ↑
+                       │                                           │
+                       └──> (restart policy)                       │
+                       │                                           │
+                       └──> starting ...                           │
+                                                                   │
+running ──(SIGTERM/SIGKILL via dispose)──────────────────────────> stopping
 ```
 
-**Process Configuration**:
-```yaml
-process_name:
-  category: string           # tmux window category
-  type: ProcessType          # bash|docker|node|webpack|angular|vite
-  command: string            # Command to execute
-  cwd: string               # Working directory
-  dependencies: string[]     # Process dependencies
-  restart: RestartPolicy     # always|on-failure|never
-  restart_delay: string      # e.g., "5s"
-  max_retries: number        # Max restart attempts
-  env: {}                   # Environment variables
-  ready: ReadyCheck          # Health check configuration
-  output: OutputConfig       # Log filtering/formatting
-  hooks: ProcessHooks        # Pre/post hooks
-  integration: {}           # Deep build integration
+- `exit-code` ready checks: spawn → await exit → if 0, ready+running (process is gone but state stays "running" to satisfy downstream deps).
+- Long-running with health probe: spawn → race(`waitForReady(probe)`, `runner.exit`) → ready+running; if exit wins, fail.
+- Unexpected exit while `running`: fail → maybe restart per policy with `restart_delay_ms` and `max_retries`.
+- Explicit `stop()`: pre_stop hook → SIGTERM → grace → SIGKILL → post_stop hook → emit stopped.
+
+## Adding a new feature
+
+- **New ready-check type**: add the Zod variant in `config/schema.ts`, add a class to `health/checks.ts`, add a case in `createProbe`. No other file should change.
+- **New build-tool parser**: add a pure function to `process/parsers.ts` and a case in `getParser`. Add a Zod literal in `processTypeSchema`. Add tests in `tests/process/parsers.test.ts`.
+- **New CLI command**: add to `src/cli.ts`. Use `loadConfig()` and build an `Orckit` instance; do not duplicate orchestration logic.
+- **New event consumer (web UI, log file, OTEL)**: write it as a separate file that subscribes to `Orckit` events. Do not modify the orchestrator.
+
+## What to avoid
+
+- Putting display logic (chalk, formatting, console.log) anywhere outside `reporter/` and `cli.ts`.
+- Adding "manager" or "service" classes that wrap a single function or hold a single instance — just export the function.
+- Reintroducing inheritance into `Runner`. If a build tool needs special spawn behavior, model that as config, not a subclass.
+- Resurrecting tmux integration, status dashboards, or build-tool library plugins inside this package. If you need them, build them as separate packages on top of the public event API.
+
+## Common commands
+
+```bash
+pnpm dev                          # tsx watch on src/cli.ts
+pnpm typecheck
+pnpm test                         # all tests (~3s on a quiet machine)
+pnpm test:unit                    # everything except tests/integration
+pnpm test:integration             # spawns real bash processes
+pnpm build                        # tsc → dist/
+ORCKIT_LOG_LEVEL=debug pnpm dev   # verbose internal logs
+ORCKIT_DEBUG=Orckit,Runner pnpm dev   # per-namespace debug
 ```
-
-#### 2. Dependency Resolver (src/core/dependency/)
-
-**Purpose**: Determine process startup order using topological sorting (Kahn's algorithm)
-
-**Key Functions**:
-- `resolveDependencies(config)`: Returns ordered array of process names
-- `groupIntoWaves(config)`: Groups processes that can start in parallel
-- `getAllDependencies(config, process)`: Returns transitive dependencies
-- `visualizeDependencyGraph(config)`: ASCII visualization
-
-**Algorithm**: Kahn's algorithm for topological sorting
-- Detects circular dependencies
-- Validates missing dependencies
-- Ensures deterministic order
-
-#### 3. Health Check System (src/core/health/)
-
-**Purpose**: Determine when processes are ready
-
-**Health Checker Types**:
-
-1. **HttpHealthChecker**: Polls HTTP endpoint
-   ```typescript
-   {
-     type: 'http',
-     url: 'http://localhost:3000/health',
-     expectedStatus: 200,
-     timeout: 60000,
-     interval: 1000,
-     maxAttempts: 60
-   }
-   ```
-
-2. **TcpHealthChecker**: Checks TCP port availability
-   ```typescript
-   {
-     type: 'tcp',
-     host: 'localhost',
-     port: 5432,
-     timeout: 30000
-   }
-   ```
-
-3. **LogPatternHealthChecker**: Waits for regex pattern in logs
-   ```typescript
-   {
-     type: 'log-pattern',
-     pattern: 'Compiled successfully',
-     timeout: 120000
-   }
-   ```
-
-4. **CustomHealthChecker**: Runs custom command
-   ```typescript
-   {
-     type: 'custom',
-     command: 'curl -f localhost:3000',
-     timeout: 60000
-   }
-   ```
-
-5. **Exit Code**: Process must exit with code 0 (handled by runner)
-
-#### 4. Process Runners (src/runners/)
-
-**Purpose**: Execute and manage different process types
-
-**Base Class** (`base.ts`):
-```typescript
-abstract class ProcessRunner extends EventEmitter {
-  abstract start(): Promise<void>;
-  abstract stop(): Promise<void>;
-  async restart(): Promise<void>;
-
-  // Events: 'status', 'stdout', 'stderr', 'exit', 'failed', 'build:info'
-}
-```
-
-**Runner Implementations**:
-- **BashRunner**: Executes shell commands via `execa`
-- **DockerRunner**: Manages Docker containers
-- **NodeRunner**: Runs Node.js applications
-- **WebpackRunner**: Webpack with custom plugin for real-time stats
-- **AngularRunner**: Angular CLI with JSON output parsing
-- **ViteRunner**: Vite dev server
-
-**Deep Build Integration**:
-- Webpack: Custom plugin injected to report progress, errors, warnings, size
-- Angular: Parses `--json` output for structured build events
-- Provides real-time build metrics via events
-
-#### 5. Output System (src/utils/logger.ts)
-
-**Purpose**: Filter and format process output
-
-**ProcessLogger Class**:
-- Suppression filters (regex patterns to hide)
-- Include filters (whitelist mode)
-- Highlighting patterns (color coding)
-- Timestamp injection
-- Custom prefixes
-- Line buffering (configurable max lines)
-
-**Color Palette**: Consistent colors per process (hashed from process name)
-
-#### 6. Orchestrator (src/core/orckit.ts)
-
-**Purpose**: Main programmatic API
-
-**Key Methods**:
-```typescript
-class Orckit extends EventEmitter {
-  constructor(options: { configPath?: string; config?: OrckitConfig })
-
-  async start(processNames?: string[]): Promise<void>
-  async stop(processNames?: string[]): Promise<void>
-  async restart(processNames: string[]): Promise<void>
-
-  getStatus(processName?: string): ProcessStatus | Map<string, ProcessStatus>
-  async waitForReady(processName: string, options?: { timeout?: number }): Promise<boolean>
-
-  addProcess(name: string, config: ProcessConfig): void
-  async removeProcess(name: string): Promise<void>
-}
-```
-
-**Events**:
-- `process:starting`
-- `process:ready`
-- `process:running`
-- `process:failed`
-- `process:stopped`
-- `process:restarting`
-- `build:start`
-- `build:progress`
-- `build:complete`
-- `build:failed`
-- `hook:start`
-- `hook:complete`
-- `all:ready`
-
-#### 7. CLI (src/cli/index.ts)
-
-**Purpose**: Command-line interface using Commander
-
-**Commands**:
-- `orc start [processes...]` - Start processes
-- `orc stop [processes...]` - Stop processes
-- `orc restart <processes...>` - Restart processes
-- `orc status` - Show process statuses
-- `orc list` - List all processes
-- `orc validate` - Validate configuration
-- `orc logs <process>` - View logs
-- `orc attach <process>` - Attach to tmux pane
-- `orc completion` - Generate shell completions
-
-## Implementation Status
-
-### ✅ Completed Features
-
-1. **Core Infrastructure**
-   - TypeScript project setup with pnpm
-   - Build pipeline (tsc, tsc-alias)
-   - Testing framework (vitest)
-   - Linting (eslint, prettier)
-
-2. **Configuration System**
-   - YAML parsing
-   - Zod validation schemas
-   - Complete type definitions
-   - Configuration helpers
-
-3. **Dependency Resolution**
-   - Topological sorting (Kahn's algorithm)
-   - Circular dependency detection
-   - Missing dependency validation
-   - Wave grouping for parallel starts
-   - Dependency visualization
-
-4. **Health Check System**
-   - HTTP checker
-   - TCP checker
-   - Log pattern checker
-   - Custom command checker
-   - Exit code support (in runners)
-
-5. **Output System**
-   - Process logger with filtering
-   - Suppression patterns
-   - Highlight patterns
-   - Include patterns (whitelist)
-   - Timestamps and prefixes
-   - Color palette
-   - Formatting utilities
-
-6. **Process Runners**
-   - Base runner class with EventEmitter
-   - Bash runner implementation
-   - Runner interface defined
-
-7. **System Utilities**
-   - Command existence checking
-   - Port availability checking
-   - Docker daemon detection
-   - tmux availability checking
-   - Process tree killing
-   - Environment merging
-
-8. **Programmatic API**
-   - Orckit orchestrator class
-   - Event-driven architecture
-   - Process control methods
-   - Status querying
-   - Dynamic process management
-
-9. **CLI**
-   - All command implementations
-   - Config file loading
-   - Event listeners
-   - Status display
-   - Validation command
-   - List command
-
-10. **Documentation**
-    - Comprehensive README
-    - CLAUDE.md (this file)
-    - Example configurations
-
-11. **Build & Testing**
-    - Project builds successfully
-    - CLI commands work
-    - Validation works
-    - Dependency resolution tested
-
-### 🚧 Partially Implemented / TODO
-
-1. **Process Runners** (Need full implementation)
-   - Docker runner
-   - Node/TypeScript runner
-   - Webpack runner with plugin
-   - Angular runner with JSON parsing
-   - Vite runner
-
-2. **Hooks System**
-   - Hook execution framework
-   - Pre/post lifecycle hooks
-   - Global hooks
-   - Hook event emission
-
-3. **Preflight Checks**
-   - Preflight check framework
-   - Built-in checks (tmux, docker, node, ports)
-   - Custom checks from config
-   - Check result display in boot sequence
-
-4. **tmux Integration**
-   - Session manager
-   - Custom theme configuration
-   - Window/pane management
-   - Overview pane with live stats
-   - Integrated terminal pane
-   - Keyboard shortcuts
-
-5. **Boot Logger**
-   - Timeline style
-   - Dashboard style
-   - Minimal style
-   - Progress bars
-   - Live updates
-   - Colored output
-
-6. **Status Monitoring**
-   - Real-time status aggregation
-   - Resource usage (CPU/memory)
-   - Build metrics display
-   - Overview pane updates
-
-7. **Build Tool Plugins**
-   - Webpack plugin (`@orckit/cli/webpack`)
-   - Angular builder (`@orckit/cli/angular`)
-   - Vite plugin (`@orckit/cli/vite`)
-
-8. **CLI Features**
-   - Log viewing (`orc logs`)
-   - tmux attach (`orc attach`)
-   - Shell autocomplete (omelette)
-
-9. **Tests**
-   - Unit tests for all modules
-   - Integration tests
-   - E2E tests
-   - Test fixtures
-   - Coverage >80%
-
-10. **Additional Documentation**
-    - Getting started guide
-    - Complete configuration reference
-    - Process types guide
-    - Health checks guide
-    - Hooks guide
-    - Output filtering guide
-    - tmux integration guide
-    - CLI reference
-    - Programmatic API docs
-    - Build integration docs
-    - Troubleshooting guide
-
-## Design Decisions
-
-### Why tmux?
-
-tmux provides:
-- Persistent sessions that survive terminal disconnect
-- Organized window/pane layout
-- Easy navigation between processes
-- Native terminal experience
-- Lightweight and ubiquitous on Unix systems
-
-### Why Topological Sorting?
-
-Kahn's algorithm ensures:
-- Correct dependency order
-- Circular dependency detection
-- Deterministic startup sequence
-- Ability to identify parallel start opportunities
-
-### Why Zod for Validation?
-
-Zod provides:
-- Type inference (TypeScript types from schema)
-- Runtime validation
-- Excellent error messages
-- Composable schemas
-- Default value support
-
-### Why EventEmitter for API?
-
-EventEmitter allows:
-- Reactive programming model
-- Multiple listeners per event
-- Easy integration with build tools
-- Standard Node.js pattern
-- Type-safe with TypeScript
-
-### Why Multiple Health Check Types?
-
-Different processes signal readiness differently:
-- HTTP services expose health endpoints
-- Databases accept TCP connections
-- Build tools print success messages
-- Scripts exit with status codes
-- Custom checks for unique scenarios
-
-## Key Files Reference
-
-### Most Important Files
-
-1. **src/types/index.ts** - All TypeScript type definitions
-2. **src/core/config/schema.ts** - Zod schemas for validation
-3. **src/core/dependency/resolver.ts** - Dependency resolution logic
-4. **src/core/health/checker.ts** - Health check implementations
-5. **src/core/orckit.ts** - Main orchestrator API
-6. **src/cli/index.ts** - CLI entry point
-7. **src/utils/logger.ts** - Output filtering and formatting
-8. **src/utils/system.ts** - System utility functions
-
-### Configuration Examples
-
-See `examples/` directory:
-- `minimal.yaml` - Simplest possible config
-- `simple.yaml` - Full-stack example with all features
-
-## Testing Strategy
-
-### Unit Tests
-
-Test individual components in isolation:
-- Config parser with various YAML inputs
-- Dependency resolver with different graphs
-- Health checkers with mocked services
-- Logger with different filter configurations
-- System utilities with mocked commands
-
-### Integration Tests
-
-Test component interactions:
-- Full process lifecycle (start → ready → stop)
-- Dependency chain execution
-- Health check → ready state transition
-- Hook execution in lifecycle
-- Event emission flow
-
-### E2E Tests
-
-Test complete workflows:
-- Start simple project
-- Handle failures and restarts
-- Validate circular dependency error
-- Test tmux session creation
-- Verify build tool integration
-
-## Future Enhancements
-
-1. **Web UI**: Optional web dashboard for GUI lovers
-2. **Profiles**: Named process sets (e.g., `orc start --profile=backend-only`)
-3. **Secret Management**: Integration with vaults
-4. **Performance Metrics**: Detailed CPU/memory tracking
-5. **Remote Monitoring**: WebSocket-based remote status viewing
-6. **Plugin System**: User-defined custom runners
-7. **Configuration Validation**: IDE integration for YAML validation
-8. **Process Groups**: Logical grouping beyond categories
-9. **Conditional Starts**: Environment-based process filtering
-10. **Log Aggregation**: Centralized searchable logs
-
-## Contributing Guidelines
-
-When working on Orckit:
-
-1. **Type Safety**: Use strict TypeScript, avoid `any`
-2. **Event-Driven**: Emit events for all lifecycle changes
-3. **Error Handling**: Throw descriptive errors with context
-4. **Testing**: Write tests for new features
-5. **Documentation**: Update docs for user-facing changes
-6. **Backwards Compat**: Don't break existing configs
-7. **Performance**: Keep startup time low
-8. **Colors**: Use chalk for terminal colors
-9. **Async/Await**: Prefer async/await over callbacks
-10. **Comments**: JSDoc for public APIs
-
-## Common Development Tasks
-
-### Adding a New Process Type
-
-1. Create runner in `src/runners/newtype.ts`
-2. Extend `ProcessRunner` base class
-3. Implement `start()` and `stop()` methods
-4. Emit events: `status`, `stdout`, `stderr`, `exit`, `failed`
-5. Add type to `ProcessType` enum in `src/types/index.ts`
-6. Update schema in `src/core/config/schema.ts`
-7. Add example to `examples/`
-8. Document in `docs/process-types.md`
-9. Write tests
-
-### Adding a New Health Check Type
-
-1. Create interface in `src/types/index.ts`
-2. Create checker class in `src/core/health/checker.ts`
-3. Implement `HealthChecker` interface
-4. Add to discriminated union in schema
-5. Update `createHealthChecker()` factory
-6. Add example to docs
-7. Write tests
-
-### Adding a New CLI Command
-
-1. Add command to `src/cli/index.ts`
-2. Use Commander's `.command()` API
-3. Add options with `.option()`
-4. Implement `.action()` handler
-5. Add to README
-6. Add to `docs/cli-reference.md`
-7. Update shell completion
-
-## Debugging Tips
-
-1. **Configuration Issues**: Use `orc validate` to check config
-2. **Dependency Problems**: Check dependency graph visualization
-3. **Health Checks**: Enable verbose logging to see attempts
-4. **Process Failures**: Check exit codes and signals
-5. **Build Problems**: Run `pnpm build` and check for TypeScript errors
-6. **tmux Issues**: Check tmux version and availability
-
-## Resources
-
-- [tmux manual](https://man.openbsd.org/tmux)
-- [Kahn's algorithm](https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm)
-- [Zod documentation](https://zod.dev)
-- [Commander.js](https://github.com/tj/commander.js)
-- [Execa](https://github.com/sindresorhus/execa)
-
----
-
-This document is maintained alongside the codebase. When making significant changes, update this file to reflect the new architecture or design decisions.

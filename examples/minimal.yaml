@@ -1,16 +1,13 @@
-version: "1"
-project: "minimal-example"
+project: minimal
 
 processes:
   hello:
-    category: main
-    command: "echo 'Hello from Orckit!'"
+    command: echo "Hello from Orckit!"
     ready:
       type: exit-code
 
   world:
-    category: main
-    command: "echo 'World!' && sleep 2"
-    dependencies: [hello]
+    command: echo "World!" && sleep 1
+    depends_on: [hello]
     ready:
       type: exit-code

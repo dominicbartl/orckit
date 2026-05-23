@@ -1,51 +1,66 @@
-/**
- * @orckit/cli - Process orchestration tool for local development
- *
- * Main export file for programmatic API
- */
+export { Orckit } from './orchestrator/orchestrator.js';
+export type { OrckitEvents } from './orchestrator/orchestrator.js';
 
-// Core API - Orckit is the main orchestrator class
-export { Orckit } from './core/orckit.js';
-export type { OrckitOptions, OrckitEvents } from './core/orckit.js';
+export {
+  type ProcessState,
+  type LifecycleEvent,
+  transition,
+  isActive,
+  isTerminal,
+} from './orchestrator/lifecycle.js';
 
-// Managers - for advanced use cases and testing
-export { ConfigManager } from './core/config/manager.js';
-export type { ConfigManagerOptions, DependencyInfo } from './core/config/manager.js';
+export { loadConfig, parseConfigText, validateConfig, ConfigError } from './config/load.js';
 
-export { ProcessManager } from './core/process/manager.js';
-export type { ProcessManagerOptions, ProcessManagerEvents } from './core/process/manager.js';
-
-
-// Status monitoring
-export { StatusMonitor, formatStatusSnapshot, formatCompactStatus } from './core/status/index.js';
-export type {
-  ProcessResourceUsage,
-  BuildMetrics,
-  ProcessStatusInfo,
-  StatusSnapshot,
-  StatusMonitorOptions,
-} from './core/status/index.js';
-
-// Types
 export type {
   OrckitConfig,
   ProcessConfig,
-  ProcessStatus,
-  ProcessDisplayInfo,
-  BuildInfo,
+  ProcessType,
   ReadyCheck,
   HttpReadyCheck,
   TcpReadyCheck,
-  ExitCodeReadyCheck,
   LogPatternReadyCheck,
+  ExitCodeReadyCheck,
   CustomReadyCheck,
-  ProcessHooks,
-  OutputConfig,
-  OrckitEventType,
-  ProcessEvent,
-  ProcessStartingEvent,
-  ProcessReadyEvent,
-  ProcessFailedEvent,
-  BuildProgressEvent,
-  BuildCompleteEvent,
-} from './types/index.js';
+  HookConfig,
+  OutputFilter,
+  RestartPolicy,
+  PreflightCheck,
+} from './config/schema.js';
+
+export {
+  buildGraph,
+  resolveStartOrder,
+  groupIntoWaves,
+  transitiveDependencies,
+  filterToTargets,
+  visualize,
+  DependencyError,
+} from './graph/resolver.js';
+
+export type { DependencyGraph } from './graph/resolver.js';
+
+export { createProbe, type HealthProbe, type ProbeResult } from './health/checks.js';
+export { waitForReady, HealthTimeoutError } from './health/wait.js';
+
+export { Runner, type Stream, type RunnerEvents } from './process/runner.js';
+export {
+  type BuildEvent,
+  type LineParser,
+  parseWebpackLine,
+  parseAngularLine,
+  getParser,
+  stripAnsi,
+} from './process/parsers.js';
+export { OutputBuffer, type OutputLine } from './process/output.js';
+
+export { runHook, HookError, type HookKind, type HookContext } from './orchestrator/hooks.js';
+export { runPreflight, PreflightError, type PreflightResult } from './orchestrator/preflight.js';
+
+export { parseDuration, formatDuration } from './config/duration.js';
+export { isPortFree } from './util/port.js';
+
+export {
+  attachCliReporter,
+  renderStatus,
+  type CliReporterOptions,
+} from './reporter/cli-reporter.js';
