@@ -22,14 +22,16 @@ describe('runPreflight', () => {
   });
 
   it('runs checks concurrently', async () => {
+    // 3 sequential checks would take ~1.5s; concurrent should be ~0.5s plus
+    // process-spawn overhead. We assert well under the sequential floor.
     const start = Date.now();
     const results = await runPreflight([
-      { name: 'a', command: 'sleep 0.3' },
-      { name: 'b', command: 'sleep 0.3' },
-      { name: 'c', command: 'sleep 0.3' },
+      { name: 'a', command: 'sleep 0.5' },
+      { name: 'b', command: 'sleep 0.5' },
+      { name: 'c', command: 'sleep 0.5' },
     ]);
     expect(results).toHaveLength(3);
     expect(results.every((r) => r.passed)).toBe(true);
-    expect(Date.now() - start).toBeLessThan(900);
+    expect(Date.now() - start).toBeLessThan(1200);
   });
 });
