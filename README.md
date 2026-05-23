@@ -96,6 +96,13 @@ processes:
     restart_delay_ms: 2000
     max_retries: 3
 
+    manual_retry: true     # default: false
+    # When false: a boot-time failure aborts `orc start` with exit 1.
+    # When true:  Orckit stays alive with the process in `failed` and any
+    #             dependents `pending`; you fix the issue and type `r <name>`
+    #             at the prompt to retry. Use for processes that depend on
+    #             external infra you control (Docker daemon, VPN, etc).
+
     hooks:
       pre_start: 'npm install'
       post_start: 'echo ready'
@@ -162,7 +169,7 @@ The state machine is exported as a pure function (`transition(state, event)`) so
 
 ### Interactive retry (`orc start` REPL)
 
-When `start()` finishes with at least one failed process, the orchestrator stays alive and dependents of the failed process(es) stay `pending`. `orc start` opens a REPL prompt on stdin (if it's a TTY) so you can fix the underlying issue and retry without restarting the whole stack:
+By default a boot-time failure aborts `orc start` (exit 1). Mark a process `manual_retry: true` to opt into fix-and-retry instead: the orchestrator stays alive, dependents of the failed process(es) stay `pending`, and `orc start` opens a REPL prompt on stdin (if it's a TTY) so you can fix the underlying issue without restarting the whole stack:
 
 ```
 1 ready  1 failed (api)  1 pending (web)

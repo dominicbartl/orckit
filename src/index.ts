@@ -1,5 +1,5 @@
-export { Orckit } from './orchestrator/orchestrator.js';
-export type { OrckitEvents } from './orchestrator/orchestrator.js';
+export { Orckit, BootFailedError } from './orchestrator/orchestrator.js';
+export type { OrckitEvents, BootSummary, RestartOptions } from './orchestrator/orchestrator.js';
 
 export {
   type ProcessState,

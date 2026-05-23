@@ -85,7 +85,11 @@ running ──(SIGTERM/SIGKILL via dispose)────────────�
 
 ### Partial boot + manual retry
 
-`Orckit.start()` uses `Promise.allSettled` per wave and **never throws on per-process failure**. It returns a `BootSummary` and emits `boot:complete: { ready, failed, pending }`. Processes whose deps failed stay `pending`. `all:ready` only fires when everything succeeded.
+`Orckit.start()` uses `Promise.allSettled` per wave. It returns a `BootSummary` and emits `boot:complete: { ready, failed, pending }`. Processes whose deps failed stay `pending`. `all:ready` only fires when everything succeeded.
+
+**Strict-by-default**: if any failed process did not opt in via `manual_retry: true`, `start()` emits `boot:complete` and then throws `BootFailedError` with the list of strict failures. The CLI catches it, prints a hint about `manual_retry`, and exits 1. Auto-restart policy still applies (a `restart: on-failure` process gets its retries before being declared failed); `manual_retry` only governs what happens once the retry budget is exhausted at boot time.
+
+Mark a process `manual_retry: true` to let its boot failure be recoverable: `start()` does not throw, the REPL opens, the user types `r <name>` to retry.
 
 `Orckit.restart(targets, { cascade = true })` stops then re-starts the listed processes and (by default) all their transitive dependents in dependency order. After the restart loop, `kickPending()` walks pending processes and starts any whose deps have become ready — that's how a successful manual retry unblocks the downstream chain that was waiting on it.
 
@@ -99,6 +103,27 @@ The interactive REPL in `src/cli.ts` (`reporter/repl.ts`) is the user-facing sur
 - **New build-tool parser**: add a pure function to `process/parsers.ts` and a case in `getParser`. Add a Zod literal in `processTypeSchema`. Add tests in `tests/process/parsers.test.ts`.
 - **New CLI command**: add to `src/cli.ts`. Use `loadConfig()` and build an `Orckit` instance; do not duplicate orchestration logic.
 - **New event consumer (web UI, log file, OTEL)**: write it as a separate file that subscribes to `Orckit` events. Do not modify the orchestrator.
+
+## Keeping public-facing docs in sync (REQUIRED)
+
+[README.md](README.md), [AGENTS.md](AGENTS.md), and [examples/](examples) ship in the npm tarball and are the only thing consumers (humans + LLMs) see. They must reflect the current public API. **Any change that touches the public surface must update them in the same commit** — out-of-date docs are worse than missing docs because they get cached as ground truth.
+
+What counts as "public surface":
+
+| If you change… | …update |
+|---|---|
+| Any Zod field in `src/config/schema.ts` (add/rename/remove/default change) | README.md config reference, AGENTS.md decision trees + checklist, any affected example in `examples/` |
+| Any export in `src/index.ts` (new/removed/renamed) | README.md programmatic API section, AGENTS.md programmatic API section |
+| Any event emitted by `Orckit` (`src/orchestrator/orchestrator.ts`) | README.md events table |
+| Any CLI command or flag (`src/cli.ts`) | README.md quick start, AGENTS.md workflow section |
+| REPL commands (`src/reporter/repl.ts`) | README.md REPL section |
+| Default values, error behavior, or anything that changes how a *working* config behaves | README.md, AGENTS.md anti-patterns / validation checklist if relevant |
+
+Quick rules:
+- AGENTS.md is for LLM agents writing configs / using the API — it's decision trees and pitfalls, not a field-by-field reference. Update it when the *advice* changes, not just when a field is added.
+- README.md is the field-by-field reference. Update it any time the schema changes.
+- Examples are ground truth for "what a working config looks like." If you add a feature worth showing, add or update an example. If you remove a feature, scrub it from existing examples.
+- The `files` array in `package.json` controls what ships. If you add a new top-level doc file (e.g. `MIGRATION.md`), add it there or it won't reach consumers.
 
 ## What to avoid
 

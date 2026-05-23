@@ -35,6 +35,10 @@ function flakyCommand(flag: string, lifetime = 'sleep 30'): string {
   return `if [ -f "${flag}" ]; then echo "ready"; ${lifetime}; else echo "no flag yet"; exit 1; fi`;
 }
 
+// Every "failed" process in these tests sets manual_retry: true so the
+// orchestrator stays alive (otherwise start() throws BootFailedError, which
+// is the new default behavior — covered separately below).
+
 describe('Manual retry / partial boot', () => {
   let orckit: Orckit | null = null;
 
@@ -58,6 +62,7 @@ describe('Manual retry / partial boot', () => {
             command: flakyCommand(flag),
             ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 2000 },
             restart: 'never',
+            manual_retry: true,
           },
         },
       }),
@@ -78,6 +83,7 @@ describe('Manual retry / partial boot', () => {
             command: flakyCommand(flag),
             ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 2000 },
             restart: 'never',
+            manual_retry: true,
           },
           api: {
             command: 'echo "api up"; sleep 30',
@@ -110,6 +116,7 @@ describe('Manual retry / partial boot', () => {
             command: flakyCommand(flag),
             ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 2000 },
             restart: 'never',
+            manual_retry: true,
           },
           api: {
             command: 'echo "api up"; sleep 30',
@@ -211,6 +218,7 @@ describe('Manual retry / partial boot', () => {
             restart: 'on-failure',
             restart_delay_ms: 5000,
             max_retries: 5,
+            manual_retry: true,
           },
         },
       }),

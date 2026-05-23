@@ -17,7 +17,13 @@ describe('processConfigSchema', () => {
       env: {},
       depends_on: [],
       buffer_size: 1000,
+      manual_retry: false,
     });
+  });
+
+  it('accepts manual_retry: true', () => {
+    const parsed = processConfigSchema.parse({ command: 'echo hi', manual_retry: true });
+    expect(parsed.manual_retry).toBe(true);
   });
 
   it('requires a command', () => {

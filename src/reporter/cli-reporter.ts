@@ -77,9 +77,16 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     if (summary.ready.length > 0) {
       parts.unshift(chalk.green(`${summary.ready.length} ready`));
     }
-    const failedTargets = summary.failed.join(' ');
-    const retryHint = failedTargets
-      ? `type ${chalk.cyan(`r ${failedTargets}`)} to retry, ${chalk.cyan('?')} for help`
+    // When the boot is about to die because something failed without
+    // manual_retry, don't suggest a retry — the CLI will print its own
+    // diagnostic and exit.
+    if (summary.strictFailures.length > 0) {
+      hint(`  ${parts.join('  ')}`);
+      return;
+    }
+    const retryable = summary.failed.join(' ');
+    const retryHint = retryable
+      ? `type ${chalk.cyan(`r ${retryable}`)} to retry, ${chalk.cyan('?')} for help`
       : `type ${chalk.cyan('?')} for help`;
     hint(`  ${parts.join('  ')}\n  ${retryHint}`);
   };

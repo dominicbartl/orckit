@@ -1,14 +1,20 @@
 # 09 — manual retry
 
-Shows the interactive REPL: when a process fails (initial-boot failure or
-runtime crash), Orckit keeps the orchestrator alive and you can fix the
-underlying issue then type `r <name>` to retry. By default a retry **cascades**
-— all transitive dependents are restarted in dependency order, and any
-processes that were stuck `pending` (because their deps had failed) come up
-once their deps reach `ready`.
+Shows opt-in fix-and-retry. By default Orckit aborts `orc start` (exit 1) the
+moment any process fails to boot. Add `manual_retry: true` to a process and
+Orckit instead keeps the orchestrator alive, leaves the process in `failed`
+state with any dependents `pending`, and prompts you to retry at the
+interactive REPL. By default a retry **cascades** — all transitive dependents
+are restarted in dependency order, and any processes that were stuck `pending`
+come up once their deps reach `ready`.
 
-**Features:** `boot:complete` summary, REPL commands (`r`, `r!`, `s`, `q`,
-`?`), partial-boot tolerance, cascade restart, auto-unblock pending.
+Typical use: a process that requires external infrastructure you control
+locally (Docker daemon, VPN, port-forward, USB device) — fail-fast is wrong
+because the fix is "start the thing yourself, then continue".
+
+**Features:** `manual_retry: true`, `boot:complete` summary, REPL commands
+(`r`, `r!`, `s`, `q`, `?`), partial-boot tolerance, cascade restart,
+auto-unblock pending.
 
 ```bash
 rm -f /tmp/orckit-demo-flag
@@ -54,3 +60,17 @@ fresh connection.
 If stdin is not a TTY (e.g. you piped output, or you're in CI), the REPL is
 skipped silently. The orchestrator still runs and the summary still prints —
 you just can't type commands. Use `--no-repl` to force-disable even in a TTY.
+
+## What happens without `manual_retry: true`
+
+Drop the `manual_retry: true` line from `flaky` in the YAML and run the
+example again with the flag still missing:
+
+```
+✗ flaky failed: exited (code 1)
+✗ boot failed: flaky
+   (mark these processes `manual_retry: true` in the config to opt into
+   fix-and-retry behavior instead of aborting on failure)
+```
+
+`orc start` exits 1 immediately — no prompt, no waiting.

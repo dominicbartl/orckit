@@ -21,6 +21,29 @@ export interface BootSummary {
   ready: string[];
   failed: string[];
   pending: string[];
+  /**
+   * Subset of `failed` that did NOT opt into `manual_retry: true`. When this
+   * is non-empty, `start()` will throw `BootFailedError` immediately after
+   * emitting `boot:complete` — reporters should treat the boot as fatal and
+   * not suggest a retry.
+   */
+  strictFailures: string[];
+}
+
+/**
+ * Thrown by `start()` when one or more processes that are NOT marked
+ * `manual_retry: true` failed during boot. The orchestrator's other
+ * processes will already have been started but the boot is considered
+ * fatal — the caller should typically tear down and exit.
+ */
+export class BootFailedError extends Error {
+  constructor(
+    public readonly strictFailures: string[],
+    public readonly summary: BootSummary,
+  ) {
+    super(`boot failed: ${strictFailures.join(', ')}`);
+    this.name = 'BootFailedError';
+  }
 }
 
 export type OrckitEvents = {
@@ -114,6 +137,10 @@ export class Orckit extends EventEmitter<OrckitEvents> {
 
     const summary = this.bootSummary(required);
     this.emit('boot:complete', summary);
+
+    if (summary.strictFailures.length > 0) {
+      throw new BootFailedError(summary.strictFailures, summary);
+    }
     if (summary.failed.length === 0 && summary.pending.length === 0) {
       this.emit('all:ready', summary.ready);
     }
@@ -211,7 +238,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       else if (state === 'failed') failed.push(name);
       else if (state === 'pending') pending.push(name);
     }
-    return { ready, failed, pending };
+    const strictFailures = failed.filter((name) => !this.handles.get(name)!.config.manual_retry);
+    return { ready, failed, pending, strictFailures };
   }
 
   private depsReady(name: string): boolean {

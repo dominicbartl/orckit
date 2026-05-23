@@ -32,6 +32,9 @@ processes:
     restart: on-failure
     restart_delay_ms: 1500
     max_retries: 2
+    # Without this, a boot-time failure aborts `orc start` with exit 1.
+    # With it, the orchestrator stays alive and waits for `r flaky`.
+    manual_retry: true
 
   dependent:
     command: |

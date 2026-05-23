@@ -176,7 +176,7 @@ describe('Orckit end-to-end', () => {
     expect(restarts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reports failure when the process exits during health check', async () => {
+  it('reports failure (BootFailedError) when the process exits during health check', async () => {
     orckit = new Orckit(
       makeConfig({
         flaky: {
@@ -188,6 +188,26 @@ describe('Orckit end-to-end', () => {
             timeout_ms: 5000,
           },
           restart: 'never',
+        },
+      }),
+    );
+    await expect(orckit.start()).rejects.toThrow(/boot failed/);
+    expect(orckit.state('flaky')).toBe('failed');
+  });
+
+  it('with manual_retry: true, the same failure does not throw', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        flaky: {
+          command: 'exit 1',
+          ready: {
+            type: 'http',
+            url: 'http://127.0.0.1:1/',
+            interval_ms: 100,
+            timeout_ms: 5000,
+          },
+          restart: 'never',
+          manual_retry: true,
         },
       }),
     );

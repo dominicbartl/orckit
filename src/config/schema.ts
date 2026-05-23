@@ -80,6 +80,15 @@ export const processConfigSchema = z.object({
   output: outputFilterSchema.optional(),
   hooks: hookConfigSchema.optional(),
   buffer_size: z.number().int().positive().default(1000),
+  /**
+   * When true, a boot-time failure of this process does NOT abort `orc start`.
+   * The orchestrator stays alive with the process in `failed` state and any
+   * dependents `pending`; the user can fix the underlying issue and type
+   * `r <name>` at the prompt to retry.
+   *
+   * Default false (strict): a single failure aborts the boot.
+   */
+  manual_retry: z.boolean().default(false),
 });
 
 const preflightCheckSchema = z.object({
