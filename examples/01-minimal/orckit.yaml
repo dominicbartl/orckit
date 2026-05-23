@@ -1,0 +1,17 @@
+project: minimal
+
+# Two one-shot processes. Each finishes immediately; the `exit-code`
+# ready check treats a clean exit as the "ready" signal, which lets
+# the second wave depend on the first.
+
+processes:
+  greet:
+    command: echo "hello from orckit"
+    ready:
+      type: exit-code
+
+  finish:
+    command: echo "and goodbye"
+    depends_on: [greet]
+    ready:
+      type: exit-code

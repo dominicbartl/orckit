@@ -1,0 +1,18 @@
+project: restart-policy
+
+# `flaky` exits non-zero every time. `restart: on-failure` retries it up to
+# `max_retries` times with `restart_delay_ms` between attempts. After the
+# retry budget is exhausted, Orckit gives up and marks it failed.
+#
+# Tweak `max_retries` or set `restart: always` to see different behavior.
+
+processes:
+  flaky:
+    command: |
+      echo "attempt starting at $(date +%s)"
+      sleep 1
+      echo "crashing"
+      exit 1
+    restart: on-failure
+    restart_delay_ms: 1500
+    max_retries: 3

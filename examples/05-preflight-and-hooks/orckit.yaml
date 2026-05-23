@@ -1,0 +1,29 @@
+project: preflight-and-hooks
+
+# Preflight checks run in parallel before any process starts. If any
+# fail, the run aborts and Orckit prints the failing check + its `on_fail`
+# hint. After preflight passes, hooks fire around each process's
+# start and stop lifecycle.
+
+preflight:
+  - name: bash-installed
+    command: command -v bash >/dev/null
+    on_fail: install bash (you should already have it!)
+  - name: node-installed
+    command: command -v node >/dev/null
+    on_fail: install Node.js 20+
+  - name: writable-tmp
+    command: test -w /tmp
+    on_fail: ensure /tmp is writable
+
+processes:
+  service:
+    command: |
+      echo "service running; press Ctrl-C to stop"
+      trap 'echo "trap: SIGTERM received"; exit 0' TERM
+      while true; do sleep 1; done
+    hooks:
+      pre_start: echo "[hook] pre_start  — about to spawn"
+      post_start: echo "[hook] post_start — process is ready"
+      pre_stop: echo "[hook] pre_stop   — about to send SIGTERM"
+      post_stop: echo "[hook] post_stop  — exit observed"

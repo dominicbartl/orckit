@@ -1,0 +1,28 @@
+project: http-server
+
+# A real Node HTTP server with an /health endpoint. Orckit waits for
+# the endpoint to return 200 before marking the process ready.
+
+processes:
+  api:
+    command: node server.js
+    cwd: ./examples/02-http-server
+    env:
+      PORT: '3001'
+      NODE_ENV: development
+    hooks:
+      pre_start: pnpm install --silent
+    ready:
+      type: http
+      url: http://localhost:3001/health
+      timeout_ms: 30000
+    output:
+      highlight:
+        - pattern: ERROR
+          color: red
+        - pattern: WARN
+          color: yellow
+        - pattern: '\[ready\]'
+          color: green
+    restart: on-failure
+    max_retries: 3

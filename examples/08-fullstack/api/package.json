@@ -1,0 +1,8 @@
+{
+  "name": "orckit-fullstack-api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

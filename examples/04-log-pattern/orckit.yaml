@@ -1,0 +1,39 @@
+project: log-pattern
+
+# Pure shell — no node_modules, no ports. The worker emits a mix of
+# DEBUG / INFO / ERROR lines and a "READY" sentinel. Orckit considers
+# the process ready once that sentinel appears in stdout.
+
+processes:
+  worker:
+    command: |
+      echo "DEBUG: connecting to bus"
+      echo "INFO: initializing"
+      sleep 1
+      echo "READY: accepting work"
+      for i in 1 2 3 4 5; do
+        echo "DEBUG: noisy internal trace $i"
+        echo "INFO: processed job $i"
+        sleep 1
+      done
+      echo "ERROR: simulated downstream failure"
+      sleep 2
+    ready:
+      type: log-pattern
+      pattern: '^READY:'
+      timeout_ms: 10000
+    output:
+      # drop everything that matches `suppress`
+      suppress:
+        - '^DEBUG:'
+      # keep ONLY lines that match `include` (after suppress)
+      # comment out to keep every non-suppressed line.
+      # include:
+      #   - '^(INFO|ERROR|READY):'
+      highlight:
+        - pattern: '^ERROR'
+          color: red
+        - pattern: '^INFO'
+          color: cyan
+        - pattern: '^READY'
+          color: green

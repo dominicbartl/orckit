@@ -1,0 +1,88 @@
+project: fullstack
+
+# A realistic local-dev stack: db (TCP) -> api (HTTP, depends on db)
+#                                          -> worker (log-pattern, depends on api)
+#                                          -> web (log-pattern, depends on api).
+# Each subdirectory is its own pnpm workspace with `pre_start: pnpm install`.
+# Categories group processes in the CLI reporter. Output filters trim noise
+# and color errors. The web service uses `type: webpack` so the webpack
+# parser can emit build:start / build:complete events.
+
+preflight:
+  - name: node-installed
+    command: command -v node >/dev/null
+    on_fail: install Node.js 20+
+  - name: pnpm-installed
+    command: command -v pnpm >/dev/null
+    on_fail: 'npm i -g pnpm'
+
+processes:
+  db:
+    category: infra
+    command: node db.js
+    cwd: ./examples/08-fullstack
+    env:
+      DB_PORT: '5433'
+    ready:
+      type: tcp
+      port: 5433
+      timeout_ms: 10000
+
+  api:
+    category: backend
+    command: node server.js
+    cwd: ./examples/08-fullstack/api
+    depends_on: [db]
+    env:
+      PORT: '3004'
+      DB_PORT: '5433'
+    hooks:
+      pre_start: pnpm install --silent
+      post_start: echo "[hook] api up — try curl localhost:3004/health"
+    ready:
+      type: http
+      url: http://localhost:3004/health
+      timeout_ms: 30000
+    output:
+      suppress:
+        - '^DEBUG'
+      highlight:
+        - pattern: 'ERROR|Error'
+          color: red
+        - pattern: 'WARN'
+          color: yellow
+    restart: on-failure
+    max_retries: 3
+    buffer_size: 500
+
+  worker:
+    category: backend
+    command: |
+      echo "starting worker"
+      i=0
+      while true; do
+        i=$((i+1))
+        echo "INFO: processed job $i"
+        sleep 2
+      done
+    depends_on: [api]
+    ready:
+      type: log-pattern
+      pattern: 'processed job 1'
+      timeout_ms: 10000
+
+  web:
+    category: frontend
+    type: webpack
+    command: node dev-server.js
+    cwd: ./examples/08-fullstack/web
+    depends_on: [api]
+    env:
+      PORT: '3005'
+      API_URL: http://localhost:3004
+    hooks:
+      pre_start: pnpm install --silent
+    ready:
+      type: log-pattern
+      pattern: 'compiled successfully'
+      timeout_ms: 30000

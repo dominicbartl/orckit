@@ -1,0 +1,34 @@
+project: database-and-api
+
+# Two-tier setup. The "db" is a tiny TCP server (a real database would
+# be e.g. `docker run postgres:15` here). Orckit's tcp probe waits for
+# the port to accept connections, then starts the API in the next wave.
+
+processes:
+  db:
+    category: infra
+    command: node db.js
+    cwd: ./examples/03-database-and-api
+    env:
+      DB_PORT: '5432'
+    ready:
+      type: tcp
+      host: localhost
+      port: 5432
+      timeout_ms: 15000
+
+  api:
+    category: backend
+    command: node api.js
+    cwd: ./examples/03-database-and-api
+    depends_on: [db]
+    env:
+      PORT: '3002'
+      DB_HOST: localhost
+      DB_PORT: '5432'
+    hooks:
+      pre_start: pnpm install --silent
+    ready:
+      type: http
+      url: http://localhost:3002/health
+      timeout_ms: 15000

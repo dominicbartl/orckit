@@ -1,0 +1,20 @@
+project: custom-ready
+
+# A `custom` ready check runs an arbitrary shell command on a polling
+# interval. The probe is considered ready when the command exits 0.
+# Use this when http/tcp/log-pattern don't fit — e.g. querying a CLI
+# tool, hitting a gRPC reflection endpoint, checking a file on disk.
+
+processes:
+  api:
+    command: node server.js
+    cwd: ./examples/07-custom-ready
+    env:
+      PORT: '3003'
+    hooks:
+      pre_start: pnpm install --silent
+    ready:
+      type: custom
+      command: 'curl -fsS http://localhost:3003/ready >/dev/null'
+      interval_ms: 500
+      timeout_ms: 15000
