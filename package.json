@@ -33,6 +33,10 @@
   },
   "files": [
     "dist",
+    "examples",
+    "!examples/**/node_modules",
+    "!examples/**/node_modules/**",
+    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],

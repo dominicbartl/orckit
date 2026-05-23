@@ -1,27 +1,14 @@
-# Source files
-src/
-tests/
-docs/
-examples/
+# The `files` array in package.json is the source of truth for what ships.
+# This file is defense-in-depth — exclude things that could otherwise leak
+# from inside a whitelisted directory (e.g. node_modules inside examples/).
 
-# Config files
-tsconfig.json
-vitest.config.ts
-.eslintrc.json
-.prettierrc.json
-.gitignore
-.npmignore
-
-# Development
-*.test.ts
-*.spec.ts
+**/node_modules
+**/node_modules/**
+.DS_Store
+*.log
 coverage/
 .vitest/
-
-# IDE
 .vscode/
 .idea/
-
-# Misc
-*.log
-.DS_Store
+*.test.ts
+*.spec.ts
