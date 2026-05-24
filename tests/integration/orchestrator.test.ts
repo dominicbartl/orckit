@@ -26,14 +26,14 @@ describe('Orckit end-to-end', () => {
     }
   });
 
-  it('starts a single process via exit-code ready', async () => {
+  it('starts a single process via exit-code ready (ends in finished)', async () => {
     orckit = new Orckit(
       makeConfig({
         hi: { command: 'echo hi', ready: { type: 'exit-code' } },
       }),
     );
     await orckit.start();
-    expect(orckit.state('hi')).toBe('running');
+    expect(orckit.state('hi')).toBe('finished');
   });
 
   it('respects depends_on order', async () => {
@@ -273,8 +273,52 @@ describe('Orckit end-to-end', () => {
       }),
     );
     await orckit.start(['leaf']);
-    expect(orckit.state('base')).toBe('running');
-    expect(orckit.state('leaf')).toBe('running');
+    expect(orckit.state('base')).toBe('finished');
+    expect(orckit.state('leaf')).toBe('finished');
     expect(orckit.state('other')).toBe('pending');
+  });
+
+  it('emits process:finished (not process:running) for exit-code processes', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        one: { command: 'echo one', ready: { type: 'exit-code' } },
+      }),
+    );
+    const events: Array<{ kind: string; name: string }> = [];
+    orckit.on('process:running', (name) => events.push({ kind: 'running', name }));
+    orckit.on('process:finished', (name) => events.push({ kind: 'finished', name }));
+    await orckit.start();
+    expect(events).toEqual([{ kind: 'finished', name: 'one' }]);
+  });
+
+  it('unblocks downstream long-running processes after an exit-code process finishes', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        migrate: { command: 'echo migrated', ready: { type: 'exit-code' } },
+        api: {
+          command: 'echo up && sleep 10',
+          depends_on: ['migrate'],
+          ready: { type: 'log-pattern', pattern: 'up' },
+        },
+      }),
+    );
+    await orckit.start();
+    expect(orckit.state('migrate')).toBe('finished');
+    expect(orckit.state('api')).toBe('running');
+  });
+
+  it('re-runs a finished process on manual restart', async () => {
+    const startTimes: number[] = [];
+    orckit = new Orckit(
+      makeConfig({
+        one: { command: 'echo one', ready: { type: 'exit-code' } },
+      }),
+    );
+    orckit.on('process:starting', () => startTimes.push(Date.now()));
+    await orckit.start();
+    expect(orckit.state('one')).toBe('finished');
+    await orckit.restart(['one']);
+    expect(orckit.state('one')).toBe('finished');
+    expect(startTimes.length).toBe(2);
   });
 });

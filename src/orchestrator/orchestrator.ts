@@ -13,7 +13,13 @@ import { HealthTimeoutError, waitForReady } from '../health/wait.js';
 import { Runner } from '../process/runner.js';
 import { OutputBuffer, type OutputLine } from '../process/output.js';
 import { getParser, type BuildEvent, type LineParser } from '../process/parsers.js';
-import { isActive, transition, type LifecycleEvent, type ProcessState } from './lifecycle.js';
+import {
+  isActive,
+  isReadyOrDone,
+  transition,
+  type LifecycleEvent,
+  type ProcessState,
+} from './lifecycle.js';
 import { runHook, type HookKind } from './hooks.js';
 import { PreflightError, runPreflight, type PreflightResult } from './preflight.js';
 
@@ -54,6 +60,7 @@ export type OrckitEvents = {
   'process:starting': [name: string];
   'process:ready': [name: string, durationMs: number];
   'process:running': [name: string];
+  'process:finished': [name: string, durationMs: number];
   'process:stopped': [name: string];
   'process:failed': [name: string, error?: Error];
   'process:restarting': [name: string, attempt: number];
@@ -234,7 +241,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     const pending: string[] = [];
     for (const name of required) {
       const state = this.handles.get(name)!.state;
-      if (state === 'running' || state === 'ready') ready.push(name);
+      if (isReadyOrDone(state)) ready.push(name);
       else if (state === 'failed') failed.push(name);
       else if (state === 'pending') pending.push(name);
     }
@@ -246,7 +253,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     const deps = this.graph.get(name) ?? [];
     return deps.every((d) => {
       const s = this.handles.get(d)?.state;
-      return s === 'ready' || s === 'running';
+      return s !== undefined && isReadyOrDone(s);
     });
   }
 
@@ -313,7 +320,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
         this.emit('process:failed', name, new Error(`exited with code ${code}`));
         throw new Error(`process "${name}" exited with code ${code}`);
       }
-      this.markReadyAndRunning(name);
+      this.markReadyAndFinished(name);
       await this.runHookSafe(name, 'post_start');
       return;
     }
@@ -363,6 +370,17 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.emit('process:ready', name, Date.now() - (handle.startedAt ?? Date.now()));
     this.applyEvent(name, { kind: 'mark-running' });
     this.emit('process:running', name);
+    this.kickPending();
+  }
+
+  private markReadyAndFinished(name: string): void {
+    // For one-shot (exit-code) processes the "ready" transition coincides with
+    // process completion — we skip emitting `process:ready` and let consumers
+    // observe `process:finished` (which carries the duration) instead.
+    this.applyEvent(name, { kind: 'ready' });
+    this.applyEvent(name, { kind: 'mark-finished' });
+    const handle = this.handles.get(name)!;
+    this.emit('process:finished', name, Date.now() - (handle.startedAt ?? Date.now()));
     this.kickPending();
   }
 

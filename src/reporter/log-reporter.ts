@@ -60,6 +60,7 @@ export function attachLogReporter(orckit: Orckit, opts: LogReporterOptions): Log
   };
 
   const onStopped = (name: string) => writeFooter(name, 'stopped');
+  const onFinished = (name: string) => writeFooter(name, 'finished');
   const onFailed = (name: string, err?: Error) => {
     const detail = err ? `: ${err.message}` : '';
     writeFooter(name, `failed${detail}`);
@@ -74,6 +75,7 @@ export function attachLogReporter(orckit: Orckit, opts: LogReporterOptions): Log
   orckit.on('process:starting', onStarting);
   orckit.on('process:line', onLine);
   orckit.on('process:stopped', onStopped);
+  orckit.on('process:finished', onFinished);
   orckit.on('process:failed', onFailed);
 
   return {
@@ -83,6 +85,7 @@ export function attachLogReporter(orckit: Orckit, opts: LogReporterOptions): Log
       orckit.off('process:starting', onStarting);
       orckit.off('process:line', onLine);
       orckit.off('process:stopped', onStopped);
+      orckit.off('process:finished', onFinished);
       orckit.off('process:failed', onFailed);
       await Promise.all([...streams.values()].map(closeStream));
       streams.clear();

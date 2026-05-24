@@ -90,7 +90,7 @@ processes:
       pattern: 'Compiled successfully'
       timeout_ms: 60000
     # or
-      type: exit-code                 # one-shot: process must exit 0 to be "ready"
+      type: exit-code                 # one-shot: process must exit 0; state ends as `finished`
       timeout_ms: 60000
     # or
       type: custom
@@ -178,8 +178,9 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `preflight:complete` | `allPassed: boolean` |
 | `process:state` | `name`, `ProcessState` |
 | `process:starting` | `name` |
-| `process:ready` | `name`, `durationMs` |
-| `process:running` | `name` |
+| `process:ready` | `name`, `durationMs` — long-running process passed its health check (not emitted for `ready: exit-code`) |
+| `process:running` | `name` — long-running process is now in operational state |
+| `process:finished` | `name`, `durationMs` — one-shot (`ready: exit-code`) completed successfully |
 | `process:stopped` | `name` |
 | `process:failed` | `name`, `Error?` |
 | `process:restarting` | `name`, `attempt` |
@@ -189,7 +190,10 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `boot:complete` | `{ ready: string[], failed: string[], pending: string[] }` — always fires after `start()` |
 | `all:ready` | `names: string[]` — only fires when nothing failed and nothing pending |
 
-`ProcessState` values: `pending` → `starting` → `ready` → `running` → `stopping` → `stopped`/`failed`.
+`ProcessState` values:
+
+- Long-running: `pending` → `starting` → `ready` → `running` → `stopping` → `stopped`/`failed`
+- One-shot (`ready: exit-code`): `pending` → `starting` → `ready` → `finished` (terminal — the process has exited 0 and downstream deps treat it as satisfied)
 
 The state machine is exported as a pure function (`transition(state, event)`) so it's trivial to test or reuse.
 

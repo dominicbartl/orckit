@@ -7,6 +7,7 @@ export {
   transition,
   isActive,
   isTerminal,
+  isReadyOrDone,
 } from './orchestrator/lifecycle.js';
 
 export { loadConfig, parseConfigText, validateConfig, ConfigError } from './config/load.js';

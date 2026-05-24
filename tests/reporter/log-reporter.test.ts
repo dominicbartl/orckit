@@ -94,6 +94,20 @@ describe('attachLogReporter', () => {
     expect(content).toMatch(/-- .* stopped/);
   });
 
+  it('writes a footer on finish (one-shot completion)', async () => {
+    const orckit = makeFakeOrckit();
+    const handle = attachLogReporter(orckit, { dir });
+
+    orckit.emit('process:starting', 'migrate');
+    orckit.emit('process:line', 'migrate', line('done'));
+    orckit.emit('process:finished', 'migrate', 12);
+
+    await handle.dispose();
+
+    const content = readFileSync(handle.fileFor('migrate'), 'utf-8');
+    expect(content).toMatch(/-- .* finished/);
+  });
+
   it('appends to existing files across multiple attaches', async () => {
     const first = attachLogReporter(makeFakeOrckit(), { dir });
     const orckitA = makeFakeOrckit();

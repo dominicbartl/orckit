@@ -20,10 +20,24 @@ describe('transition', () => {
     expect(transition('ready', { kind: 'mark-running' })).toBe('running');
   });
 
+  it('ready → finished on mark-finished', () => {
+    expect(transition('ready', { kind: 'mark-finished' })).toBe('finished');
+  });
+
+  it('finished → starting on start (manual restart)', () => {
+    expect(transition('finished', { kind: 'start' })).toBe('starting');
+  });
+
   it('active states → stopping on stop-requested', () => {
     for (const s of ['starting', 'ready', 'running'] as ProcessState[]) {
       expect(transition(s, { kind: 'stop-requested' })).toBe('stopping');
     }
+  });
+
+  it('finished cannot be stopped (already terminal)', () => {
+    expect(() => transition('finished', { kind: 'stop-requested' })).toThrow(
+      IllegalTransitionError,
+    );
   });
 
   it('stopping → stopped on exited', () => {
@@ -81,7 +95,7 @@ describe('isActive / isTerminal', () => {
     expect(isTerminal(s)).toBe(false);
   });
 
-  it.each(['stopped', 'failed'] as ProcessState[])('%s is terminal', (s) => {
+  it.each(['stopped', 'failed', 'finished'] as ProcessState[])('%s is terminal', (s) => {
     expect(isActive(s)).toBe(false);
     expect(isTerminal(s)).toBe(true);
   });

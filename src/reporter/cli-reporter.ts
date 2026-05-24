@@ -8,6 +8,7 @@ const STATE_COLOR: Record<ProcessState, (s: string) => string> = {
   starting: chalk.yellow,
   ready: chalk.green,
   running: chalk.green,
+  finished: chalk.green,
   stopping: chalk.yellow,
   stopped: chalk.gray,
   failed: chalk.red,
@@ -18,6 +19,7 @@ const STATE_ICON: Record<ProcessState, string> = {
   starting: '⠋',
   ready: '✓',
   running: '●',
+  finished: '✓',
   stopping: '⠿',
   stopped: '○',
   failed: '✗',
@@ -40,6 +42,10 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   const onStarting = (name: string) => out(chalk.gray(`  ${STATE_ICON.starting} ${name} starting`));
   const onReady = (name: string, ms: number) =>
     out(`  ${chalk.green(STATE_ICON.ready)} ${name} ready ${chalk.dim(`(${formatDuration(ms)})`)}`);
+  const onFinished = (name: string, ms: number) =>
+    out(
+      `  ${chalk.green(STATE_ICON.finished)} ${name} finished ${chalk.dim(`(${formatDuration(ms)})`)}`,
+    );
   const onStopped = (name: string) => out(`  ${chalk.gray(STATE_ICON.stopped)} ${name} stopped`);
   const onFailed = (name: string, err?: Error) =>
     out(
@@ -105,6 +111,7 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   orckit.on('preflight:result', onPreflightResult);
   orckit.on('process:starting', onStarting);
   orckit.on('process:ready', onReady);
+  orckit.on('process:finished', onFinished);
   orckit.on('process:stopped', onStopped);
   orckit.on('process:failed', onFailed);
   orckit.on('process:restarting', onRestarting);
@@ -118,6 +125,7 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     orckit.off('preflight:result', onPreflightResult);
     orckit.off('process:starting', onStarting);
     orckit.off('process:ready', onReady);
+    orckit.off('process:finished', onFinished);
     orckit.off('process:stopped', onStopped);
     orckit.off('process:failed', onFailed);
     orckit.off('process:restarting', onRestarting);
