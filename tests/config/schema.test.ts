@@ -77,6 +77,27 @@ describe('orckitConfigSchema', () => {
     expect(parsed.preflight).toEqual([]);
   });
 
+  it('applies logs defaults', () => {
+    const parsed = orckitConfigSchema.parse({ processes: { a: { command: 'echo' } } });
+    expect(parsed.logs).toEqual({ enabled: false, dir: '.orckit/logs' });
+  });
+
+  it('accepts a custom logs block', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      logs: { enabled: true, dir: '/var/log/orckit' },
+    });
+    expect(parsed.logs).toEqual({ enabled: true, dir: '/var/log/orckit' });
+  });
+
+  it('logs.enabled partial override keeps default dir', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      logs: { enabled: true },
+    });
+    expect(parsed.logs).toEqual({ enabled: true, dir: '.orckit/logs' });
+  });
+
   it('accepts a complete configuration', () => {
     const parsed = orckitConfigSchema.parse({
       project: 'demo',

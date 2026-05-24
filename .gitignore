@@ -17,6 +17,9 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Orckit
+.orckit/
+
 # Environment
 .env
 .env.local

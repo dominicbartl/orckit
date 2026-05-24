@@ -25,6 +25,7 @@ export type {
   OutputFilter,
   RestartPolicy,
   PreflightCheck,
+  LogsConfig,
 } from './config/schema.js';
 
 export {
@@ -64,3 +65,8 @@ export {
   renderStatus,
   type CliReporterOptions,
 } from './reporter/cli-reporter.js';
+export {
+  attachLogReporter,
+  type LogReporterOptions,
+  type LogReporterHandle,
+} from './reporter/log-reporter.js';

@@ -139,6 +139,20 @@ output:
 
 Applied in order: `suppress` drops matches first, then `include` (if non-empty) keeps only matches of what remains, then `highlight` colors what survives. Most configs only need `suppress` + `highlight`. Valid colors: `red green yellow blue magenta cyan gray`.
 
+## `logs` (top-level, optional)
+
+Off by default. Enable it when the terminal output isn't enough — e.g. flaky processes whose failures need post-mortem analysis, or stacks where multiple noisy services would interleave on stdout but each needs to be readable on its own.
+
+```yaml
+logs:
+  enabled: true
+  dir: .orckit/logs   # default; relative to cwd
+```
+
+Each process gets its own file. Sessions within a file are separated by a banner on every spawn (initial start, auto-restart, manual retry), so restart history is preserved. `output.suppress` / `include` still apply — log files contain exactly what the CLI reporter would show with `--show-output`. Suggest the user add `.orckit/` to `.gitignore` when enabling.
+
+Do **not** enable it just because you can — for short-lived dev sessions, the in-memory `buffer_size` is usually enough and avoids leftover files. Enable when sessions are long, processes are flaky, or the user has asked for persistent logs.
+
 ## Environment and secrets
 
 `env` is a `{ KEY: value }` map merged into the spawned process's environment. **Do not put secrets in `env`** — the YAML is checked in. Tell the user to:

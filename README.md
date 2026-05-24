@@ -56,6 +56,10 @@ Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
 ```yaml
 project: my-project          # optional, used in CLI output
 
+logs:                        # optional; off by default
+  enabled: true              # default: false
+  dir: .orckit/logs          # default: .orckit/logs (relative to cwd)
+
 preflight:                   # optional pre-startup checks (run in parallel)
   - name: docker-up
     command: docker info >/dev/null
@@ -126,6 +130,28 @@ processes:
 - **angular** — same as bash, plus an Angular CLI output parser.
 
 The parsers are best-effort regex against modern tool output and exist purely so the CLI reporter can show useful build status. If you don't care about that, just use `bash`.
+
+## Per-process log files
+
+Set `logs.enabled: true` at the top level of `orckit.yaml` to write each process's stdout/stderr to its own file in `logs.dir` (default `.orckit/logs`, relative to the working directory). Files are append-only — every spawn (initial start, auto-restart, manual retry) writes a banner so a single file can carry many sessions:
+
+```
+========================================================================
+== api started 2026-05-24T10:32:18.812Z (pid 12345)
+========================================================================
+  Listening on http://localhost:3000
+! Warning: deprecated config key
+-- 2026-05-24T10:35:02.110Z stopped
+
+========================================================================
+== api started 2026-05-24T10:35:04.260Z (pid 12410)
+========================================================================
+  Listening on http://localhost:3000
+```
+
+`stdout` lines are prefixed with two spaces; `stderr` with `! `. `output.suppress` / `include` filters apply (matched-out lines are not written). The CLI reporter still runs as normal — log files are additive. Add `.orckit/` to your `.gitignore` if you store the logs in the repo.
+
+Programmatically: `attachLogReporter(orckit, { dir })` returns a handle with a `dispose()` you must call during teardown.
 
 ## Programmatic API
 

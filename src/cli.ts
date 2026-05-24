@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { loadConfig, ConfigError } from './config/load.js';
 import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
+import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { buildGraph, visualize } from './graph/resolver.js';
 
@@ -75,6 +76,12 @@ program
         printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
       });
 
+      let logReporter: LogReporterHandle | null = null;
+      if (config.logs.enabled) {
+        logReporter = attachLogReporter(orckit, { dir: config.logs.dir });
+        console.log(chalk.dim(`  writing logs to ${logReporter.dir}`));
+      }
+
       let shuttingDown = false;
       const shutdown = async (signal: string, code = 0) => {
         if (shuttingDown) return;
@@ -82,6 +89,7 @@ program
         console.log(chalk.yellow(`\n  received ${signal}, stopping...`));
         repl?.detach();
         await orckit.dispose();
+        await logReporter?.dispose();
         console.log(renderStatus(orckit.states()));
         process.exit(code);
       };

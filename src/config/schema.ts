@@ -97,12 +97,24 @@ const preflightCheckSchema = z.object({
   on_fail: z.string().optional(),
 });
 
+const logsConfigSchema = z.object({
+  /**
+   * When true, every process's stdout/stderr is appended to a per-process file
+   * under `dir`. A header line marks each spawn (initial start, auto-restart,
+   * manual retry) so a single file can carry many sessions.
+   */
+  enabled: z.boolean().default(false),
+  /** Directory (relative to cwd or absolute) for log files. */
+  dir: z.string().default('.orckit/logs'),
+});
+
 export const orckitConfigSchema = z.object({
   project: z.string().default('orckit'),
   processes: z.record(z.string(), processConfigSchema).refine((p) => Object.keys(p).length > 0, {
     message: 'at least one process is required',
   }),
   preflight: z.array(preflightCheckSchema).default([]),
+  logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
 });
 
 export type OrckitConfig = z.infer<typeof orckitConfigSchema>;
@@ -118,3 +130,4 @@ export type HookConfig = z.infer<typeof hookConfigSchema>;
 export type RestartPolicy = z.infer<typeof restartPolicySchema>;
 export type ProcessType = z.infer<typeof processTypeSchema>;
 export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
+export type LogsConfig = z.infer<typeof logsConfigSchema>;
