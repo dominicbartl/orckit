@@ -15,7 +15,7 @@ Use it when a developer needs `db → api → web` started in order with health 
 3. Pick a ready check per process — see the decision tree below.
 4. Write `orckit.yaml`.
 5. Run `npx orc validate -c orckit.yaml`. It parses the file, builds the dependency graph, prints both, and exits non-zero on any problem. **Always run this before declaring the config done.**
-6. Optionally `npx orc start --show-output` to verify the boot sequence actually works.
+6. Optionally `npx orc start` to verify the boot sequence actually works — on a TTY this shows a live, wave-grouped graph that updates per process (spinner → ✓ / ✗). Process output streams above the graph automatically during boot; `--show-output` controls *post-boot* streaming. Pass `--no-live` if you need plain line-by-line output (e.g. capturing to a log file).
 
 ## Minimal valid config
 

@@ -29,30 +29,77 @@ export interface CliReporterOptions {
   showOutput?: boolean;
   showBuild?: boolean;
   /**
+   * How many of the most recent output lines to dump beneath a `process:failed`
+   * line. 0 disables the dump entirely. Defaults to 10.
+   */
+  failureTailLines?: number;
+  /**
    * Optional hint sink for messages that should appear above the REPL prompt.
    * If omitted, hints are written to stdout with a leading blank line.
    */
   printHint?: (message: string) => void;
+  /**
+   * Where to send output. Defaults to `console.log`. The live boot view passes
+   * its `printAbove` so reporter output flows above the live graph cleanly.
+   */
+  out?: (msg: string) => void;
+  /**
+   * Suppress per-process lifecycle event lines (starting / ready / finished /
+   * stopped / failed / restarting). Set this when another consumer — the live
+   * boot view — owns the rendering of those state changes. Failure tails
+   * (the recent-output dump) are still printed.
+   */
+  quietProcessEvents?: boolean;
 }
 
 export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {}): () => void {
-  const out = (msg: string) => console.log(msg);
+  const out = opts.out ?? ((msg: string) => console.log(msg));
   const hint = opts.printHint ?? ((msg: string) => out('\n' + msg));
+  const tailLines = opts.failureTailLines ?? 10;
+  const quiet = opts.quietProcessEvents ?? false;
 
-  const onStarting = (name: string) => out(chalk.gray(`  ${STATE_ICON.starting} ${name} starting`));
-  const onReady = (name: string, ms: number) =>
+  const onStarting = (name: string) => {
+    if (quiet) return;
+    out(chalk.gray(`  ${STATE_ICON.starting} ${name} starting`));
+  };
+  const onReady = (name: string, ms: number) => {
+    if (quiet) return;
     out(`  ${chalk.green(STATE_ICON.ready)} ${name} ready ${chalk.dim(`(${formatDuration(ms)})`)}`);
-  const onFinished = (name: string, ms: number) =>
+  };
+  const onFinished = (name: string, ms: number) => {
+    if (quiet) return;
     out(
       `  ${chalk.green(STATE_ICON.finished)} ${name} finished ${chalk.dim(`(${formatDuration(ms)})`)}`,
     );
-  const onStopped = (name: string) => out(`  ${chalk.gray(STATE_ICON.stopped)} ${name} stopped`);
-  const onFailed = (name: string, err?: Error) =>
-    out(
-      `  ${chalk.red(STATE_ICON.failed)} ${name} failed${err ? `: ${chalk.red(err.message)}` : ''}`,
-    );
-  const onRestarting = (name: string, attempt: number) =>
+  };
+  const onStopped = (name: string) => {
+    if (quiet) return;
+    out(`  ${chalk.gray(STATE_ICON.stopped)} ${name} stopped`);
+  };
+  const onFailed = (name: string, err?: Error) => {
+    if (!quiet) {
+      out(
+        `  ${chalk.red(STATE_ICON.failed)} ${name} failed${err ? `: ${chalk.red(err.message)}` : ''}`,
+      );
+    }
+    if (tailLines > 0) {
+      const tail = orckit.output(name, tailLines);
+      if (quiet && tail.length > 0) {
+        // The live view consumes the "failed" headline itself, but the user
+        // still wants to see WHY — print a short prefix so the dump is
+        // recognisable in scrollback.
+        out(`  ${chalk.red(STATE_ICON.failed)} ${name} failed${err ? `: ${chalk.red(err.message)}` : ''}`);
+      }
+      for (const line of tail) {
+        const marker = line.stream === 'stderr' ? chalk.red('!') : chalk.red('│');
+        out(`      ${marker} ${chalk.dim(line.text)}`);
+      }
+    }
+  };
+  const onRestarting = (name: string, attempt: number) => {
+    if (quiet) return;
     out(`  ${chalk.yellow('↻')} ${name} restarting (attempt ${attempt})`);
+  };
   const onPreflightStart = () => out(chalk.cyan.bold('\n  Preflight'));
   const onPreflightResult = (r: {
     name: string;
@@ -100,7 +147,7 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     ? (name: string, line: { text: string; stream: string; highlight?: string }) => {
         const colorFn = line.highlight ? colorFor(line.highlight) : chalk.dim;
         const stream = line.stream === 'stderr' ? chalk.red('!') : chalk.dim('│');
-        console.log(`  ${chalk.cyan(name)} ${stream} ${colorFn(line.text)}`);
+        out(`  ${chalk.cyan(name)} ${stream} ${colorFn(line.text)}`);
       }
     : null;
   const onBuild = opts.showBuild

@@ -47,12 +47,17 @@ npx orc validate          # check config + print dependency graph
 npx orc list              # list processes
 npx orc start             # boot everything in dependency order
 npx orc start api         # boot just api (and its deps)
-npx orc start --show-output     # also stream stdout/stderr to the terminal
+npx orc start --show-output     # also stream stdout/stderr to the terminal post-boot
+npx orc start --no-live         # disable the animated boot view (plain line-by-line output)
 npx orc start --mcp-port 7700   # override the YAML mcp.port
 npx orc start --no-mcp          # force-disable the built-in MCP server
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
+
+### Live boot view
+
+When stdout is a TTY, `orc start` renders the dependency graph as a live region at the bottom of the terminal: each process row shows an icon (`○` pending, `⠋` animated while starting, `✓` ready, `✗` failed) and the elapsed time once it settles. Process output streams above the graph during the boot phase so you can see what's happening while a slow process is still spinning. After all processes are ready (or the boot fails), the live region freezes — the final graph stays in scrollback — and the reporter falls back to plain line-by-line output for runtime events. Pass `--no-live` to skip the live view entirely.
 
 ## Configuration reference
 

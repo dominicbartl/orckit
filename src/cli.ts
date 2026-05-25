@@ -5,9 +5,11 @@ import { loadConfig, ConfigError } from './config/load.js';
 import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
-import { attachRepl, type Repl } from './reporter/repl.js';
 import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
-import { buildGraph, visualize } from './graph/resolver.js';
+import { attachRepl, type Repl } from './reporter/repl.js';
+import { renderGraph } from './reporter/graph-view.js';
+import { attachLiveBootView, type LiveBootViewHandle } from './reporter/live-view.js';
+import { buildGraph } from './graph/resolver.js';
 
 const program = new Command()
   .name('orc')
@@ -22,10 +24,10 @@ program
     try {
       const config = loadConfig(opts.config);
       console.log(chalk.green('✓ configuration valid'));
-      console.log(chalk.bold('\nDependency graph:'));
+      console.log(chalk.bold('\nDependency graph'));
       const graph = buildGraph(config);
       console.log(
-        visualize(graph)
+        renderGraph(graph)
           .split('\n')
           .map((line) => `  ${line}`)
           .join('\n'),
@@ -59,9 +61,10 @@ program
   .command('start [processes...]')
   .description('Start all processes (or only the listed ones plus their dependencies)')
   .option('-c, --config <path>', 'config file path', './orckit.yaml')
-  .option('--show-output', 'stream process stdout/stderr to terminal', false)
+  .option('--show-output', 'stream process stdout/stderr to terminal after boot', false)
   .option('--show-build', 'show build events (webpack/angular)', false)
   .option('--no-repl', 'disable the interactive command prompt')
+  .option('--no-live', 'disable the animated boot view (use plain line-by-line output)')
   .option('--mcp-port <port>', 'override the YAML mcp.port (must be enabled in config)')
   .option('--no-mcp', 'force-disable the built-in MCP server, overriding YAML')
   .action(
@@ -72,6 +75,7 @@ program
         showOutput: boolean;
         showBuild: boolean;
         repl: boolean;
+        live: boolean;
         mcp: boolean;
         mcpPort?: string;
       },
@@ -80,12 +84,6 @@ program
       const orckit = new Orckit(config);
 
       let repl: Repl | null = null;
-      attachCliReporter(orckit, {
-        showOutput: opts.showOutput,
-        showBuild: opts.showBuild,
-        printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
-      });
-
       let logReporter: LogReporterHandle | null = null;
       if (config.logs.enabled) {
         logReporter = attachLogReporter(orckit, { dir: config.logs.dir });
@@ -122,10 +120,40 @@ program
         }
       }
 
+      // Attach the live boot view AFTER startup chatter (log dir, mcp url) so
+      // those lines stay above the live region in scrollback. Falls back to
+      // null when stdout isn't a TTY (or --no-live was passed); the regular
+      // line-by-line reporter then owns the boot output.
+      const live: LiveBootViewHandle | null = opts.live === false ? null : attachLiveBootView(orckit);
+
+      let detachBootReporter: (() => void) | null = null;
+      if (live) {
+        // While the live graph is showing, the per-process state lines are
+        // redundant — the graph reflects them. Output lines, preflight
+        // results, build events and the boot summary still flow through the
+        // reporter, routed above the live region via printAbove. Logs are
+        // always streamed during the live phase so the user can see what's
+        // happening; --show-output controls post-boot behavior.
+        detachBootReporter = attachCliReporter(orckit, {
+          showOutput: true,
+          showBuild: opts.showBuild,
+          out: live.printAbove,
+          quietProcessEvents: true,
+          printHint: live.printAbove,
+        });
+      } else {
+        attachCliReporter(orckit, {
+          showOutput: opts.showOutput,
+          showBuild: opts.showBuild,
+          printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
+        });
+      }
+
       let shuttingDown = false;
       const shutdown = async (signal: string, code = 0) => {
         if (shuttingDown) return;
         shuttingDown = true;
+        live?.dispose();
         console.log(chalk.yellow(`\n  received ${signal}, stopping...`));
         repl?.detach();
         await orckit.dispose();
@@ -142,6 +170,7 @@ program
         await orckit.start(targets);
       } catch (err) {
         if (err instanceof BootFailedError) {
+          live?.dispose();
           console.error(chalk.red(`\n  ✗ boot failed: ${err.strictFailures.join(', ')}`));
           console.error(
             chalk.dim(
@@ -152,7 +181,21 @@ program
           await shutdown('boot failure', 1);
           return;
         }
+        live?.dispose();
         fail(err);
+      }
+
+      if (live) {
+        // Boot's done. Tear down the quiet boot reporter and attach a regular
+        // one so post-boot events (crashes, manual retries, output lines per
+        // user flags) print normally beneath the frozen graph.
+        live.dispose();
+        detachBootReporter?.();
+        attachCliReporter(orckit, {
+          showOutput: opts.showOutput,
+          showBuild: opts.showBuild,
+          printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
+        });
       }
 
       if (opts.repl) {
