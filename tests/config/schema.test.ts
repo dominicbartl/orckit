@@ -38,6 +38,67 @@ describe('processConfigSchema', () => {
     expect(processConfigSchema.parse({ command: 'x', type: 'webpack' }).type).toBe('webpack');
     expect(processConfigSchema.parse({ command: 'x', type: 'angular' }).type).toBe('angular');
   });
+
+  describe('type: docker', () => {
+    it('requires container_name', () => {
+      expect(() =>
+        processConfigSchema.parse({
+          type: 'docker',
+          command: 'docker run --name foo postgres:16',
+        }),
+      ).toThrow(/container_name is required/);
+    });
+
+    it('accepts a valid docker process', () => {
+      const parsed = processConfigSchema.parse({
+        type: 'docker',
+        command: 'docker run --name foo postgres:16',
+        container_name: 'foo',
+      });
+      expect(parsed.type).toBe('docker');
+      expect(parsed.container_name).toBe('foo');
+      // schema does NOT auto-fill stop_command — that's an orchestrator
+      // concern (applyDockerDefaults). The schema only validates.
+      expect(parsed.stop_command).toBeUndefined();
+    });
+
+    it('rejects container_name on non-docker types', () => {
+      expect(() =>
+        processConfigSchema.parse({
+          type: 'bash',
+          command: 'echo hi',
+          container_name: 'foo',
+        }),
+      ).toThrow(/container_name only applies to type: docker/);
+    });
+
+    it('rejects malformed container names', () => {
+      expect(() =>
+        processConfigSchema.parse({
+          type: 'docker',
+          command: 'x',
+          container_name: 'foo;rm -rf /',
+        }),
+      ).toThrow(/invalid Docker container name/);
+      expect(() =>
+        processConfigSchema.parse({
+          type: 'docker',
+          command: 'x',
+          container_name: '-leading-dash',
+        }),
+      ).toThrow(/invalid Docker container name/);
+    });
+
+    it('allows the user to override stop_command', () => {
+      const parsed = processConfigSchema.parse({
+        type: 'docker',
+        command: 'docker run --name foo postgres:16',
+        container_name: 'foo',
+        stop_command: 'docker compose down',
+      });
+      expect(parsed.stop_command).toBe('docker compose down');
+    });
+  });
 });
 
 describe('readyCheckSchema', () => {

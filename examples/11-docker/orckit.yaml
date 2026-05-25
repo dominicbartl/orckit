@@ -1,0 +1,32 @@
+project: docker
+
+# `type: docker` does two things on top of plain `bash`:
+#   1. Before every spawn it runs `docker rm -f <container_name>` so a
+#      container left over from a previous crashed run doesn't fail the
+#      new `docker run --name <container_name> ...` with a name conflict.
+#   2. `stop_command` defaults to `docker rm -f <container_name>` so Ctrl-C
+#      actually tears the container down (the local `docker` CLI is just a
+#      client — killing it doesn't stop the container).
+#
+# Requires Docker. Run `docker info` first if you're unsure it's up.
+
+preflight:
+  - name: docker-up
+    command: docker info >/dev/null 2>&1
+    on_fail: start Docker Desktop (or `colima start`, `orbstack start`, etc.)
+
+processes:
+  postgres:
+    type: docker
+    container_name: orckit-example-pg
+    command: |
+      docker run --rm \
+        --name=orckit-example-pg \
+        -p 5439:5432 \
+        -e POSTGRES_PASSWORD=dev \
+        -e POSTGRES_DB=orckit_example \
+        postgres:16
+    ready:
+      type: tcp
+      port: 5439
+      timeout_ms: 30000

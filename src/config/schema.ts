@@ -68,42 +68,76 @@ const hookConfigSchema = z.object({
 // error.
 const restartPolicySchema = z.enum(['always', 'on-failure', 'never']).default('never');
 
-const processTypeSchema = z.enum(['bash', 'webpack', 'angular']).default('bash');
+const processTypeSchema = z.enum(['bash', 'webpack', 'angular', 'docker']).default('bash');
 
-export const processConfigSchema = z.object({
-  category: z.string().default('default'),
-  type: processTypeSchema,
-  command: z.string().min(1),
-  /**
-   * Shell command run during shutdown *instead of* SIGTERM. Use it for CLI
-   * clients that manage external resources their own process doesn't directly
-   * own — e.g. `docker run`, where killing the local CLI doesn't necessarily
-   * stop the container. orckit fires the command, then waits the normal grace
-   * period for the main process to exit; if it's still alive at the end of
-   * the grace window it gets SIGKILLed as a last resort. Falls back to plain
-   * SIGTERM when unset.
-   */
-  stop_command: z.string().optional(),
-  cwd: z.string().optional(),
-  env: z.record(z.string(), z.string()).default({}),
-  depends_on: z.array(z.string()).default([]),
-  ready: readyCheckSchema.optional(),
-  restart: restartPolicySchema,
-  restart_delay_ms: z.number().int().nonnegative().default(2000),
-  max_retries: z.number().int().nonnegative().default(3),
-  output: outputFilterSchema.optional(),
-  hooks: hookConfigSchema.optional(),
-  buffer_size: z.number().int().positive().default(1000),
-  /**
-   * When true, a boot-time failure of this process does NOT abort `orc start`.
-   * The orchestrator stays alive with the process in `failed` state and any
-   * dependents `pending`; the user can fix the underlying issue and type
-   * `r <name>` at the prompt to retry.
-   *
-   * Default false (strict): a single failure aborts the boot.
-   */
-  manual_retry: z.boolean().default(false),
-});
+const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+export const processConfigSchema = z
+  .object({
+    category: z.string().default('default'),
+    type: processTypeSchema,
+    command: z.string().min(1),
+    /**
+     * Shell command run during shutdown *instead of* SIGTERM. Use it for CLI
+     * clients that manage external resources their own process doesn't directly
+     * own — e.g. `docker run`, where killing the local CLI doesn't necessarily
+     * stop the container. orckit fires the command, then waits the normal grace
+     * period for the main process to exit; if it's still alive at the end of
+     * the grace window it gets SIGKILLed as a last resort. Falls back to plain
+     * SIGTERM when unset.
+     *
+     * For `type: docker`, this defaults to `docker rm -f <container_name>` when
+     * not set explicitly.
+     */
+    stop_command: z.string().optional(),
+    /**
+     * Required when `type: docker`; the container handle orckit uses to clean
+     * up orphans before spawn (a `docker rm -f` is run before `pre_start`) and
+     * to tear the container down on shutdown (used as the default
+     * `stop_command`). Must match the `--name=<...>` flag in the docker command.
+     * Rejected for non-docker process types.
+     */
+    container_name: z
+      .string()
+      .min(1)
+      .regex(DOCKER_NAME_RE, 'invalid Docker container name (must match [a-zA-Z0-9][a-zA-Z0-9_.-]*)')
+      .optional(),
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).default({}),
+    depends_on: z.array(z.string()).default([]),
+    ready: readyCheckSchema.optional(),
+    restart: restartPolicySchema,
+    restart_delay_ms: z.number().int().nonnegative().default(2000),
+    max_retries: z.number().int().nonnegative().default(3),
+    output: outputFilterSchema.optional(),
+    hooks: hookConfigSchema.optional(),
+    buffer_size: z.number().int().positive().default(1000),
+    /**
+     * When true, a boot-time failure of this process does NOT abort `orc start`.
+     * The orchestrator stays alive with the process in `failed` state and any
+     * dependents `pending`; the user can fix the underlying issue and type
+     * `r <name>` at the prompt to retry.
+     *
+     * Default false (strict): a single failure aborts the boot.
+     */
+    manual_retry: z.boolean().default(false),
+  })
+  .superRefine((data, ctx) => {
+    if (data.type === 'docker' && !data.container_name) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'container_name is required when type is "docker"',
+        path: ['container_name'],
+      });
+    }
+    if (data.type !== 'docker' && data.container_name) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `container_name only applies to type: docker (got type: ${data.type})`,
+        path: ['container_name'],
+      });
+    }
+  });
 
 const preflightCheckSchema = z.object({
   name: z.string().min(1),

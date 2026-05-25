@@ -23,8 +23,9 @@ project: my-app
 
 processes:
   db:
+    type: docker                           # auto-wires stop + orphan cleanup
+    container_name: my-app-db
     command: docker run --rm --name=my-app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
-    stop_command: docker stop my-app-db    # ensures the container is stopped on shutdown
     ready:
       type: tcp
       port: 5432
@@ -80,13 +81,17 @@ preflight:                   # optional pre-startup checks (run in parallel)
 
 processes:
   <name>:
-    type: bash | webpack | angular   # default: bash
+    type: bash | webpack | angular | docker   # default: bash
     command: <shell command>          # required
+    container_name: <name>            # required when type: docker; rejected otherwise.
+                                      # Used to auto-fill stop_command and to nuke
+                                      # orphan containers before spawn.
     stop_command: <shell command>     # optional; run *instead of* SIGTERM during shutdown.
                                       # Use for CLI clients managing external state — e.g.
                                       # `docker stop <name>` for a `docker run --name <name> ...`
                                       # process. Falls back to SIGKILL if the main process is
                                       # still alive after the grace period.
+                                      # For `type: docker` defaults to `docker rm -f <container_name>`.
     cwd: <path>                       # default: current dir
     category: <string>                # cosmetic grouping; default: 'default'
     env: { KEY: value }
@@ -147,6 +152,18 @@ processes:
 - **bash** — default. Runs the command via `bash -c`.
 - **webpack** — same as bash, plus a stdout parser that emits `build:start` / `build:progress` / `build:complete` / `build:failed` events on standard webpack output.
 - **angular** — same as bash, plus an Angular CLI output parser.
+- **docker** — same as bash, plus two conveniences for `docker run`-style commands. Before every spawn, orckit runs `docker rm -f <container_name>` so a container left behind by a previous crashed run doesn't block the new `docker run --name <container_name> ...` with a name conflict. And `stop_command` defaults to `docker rm -f <container_name>`, so Ctrl-C tears the container down even though the local `docker` CLI was just a client. `container_name` is required and must match the `--name=` in `command`. Orphan-cleanup failures (no such container, daemon down, docker not installed) are silently ignored — the `docker run` itself surfaces the real error.
+
+```yaml
+processes:
+  postgres:
+    type: docker
+    container_name: my-app-db
+    command: docker run --rm --name=my-app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16
+    ready: { type: tcp, port: 5432 }
+```
+
+For shapes orckit's docker defaults don't cover (e.g. `docker compose up` / `docker compose down`), stay on `type: bash` with an explicit `stop_command`.
 
 The parsers are best-effort regex against modern tool output and exist purely so the CLI reporter can show useful build status. If you don't care about that, just use `bash`.
 

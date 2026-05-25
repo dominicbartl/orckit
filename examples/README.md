@@ -16,6 +16,7 @@ install` hook bootstrap their dependencies on first run.
 | [`08-fullstack`](08-fullstack) | The lot: preflight, multi-wave deps, webpack parser, filters, hooks, restart, categories |
 | [`09-manual-retry`](09-manual-retry) | Partial-boot tolerance, REPL commands (`r`, `r!`, `s`, `q`), cascade restart, auto-unblock pending |
 | [`10-mcp`](10-mcp) | Built-in MCP server: `mcp:` YAML block, `claude mcp add --transport http`, the three read-only tools |
+| [`11-docker`](11-docker) | `type: docker` + `container_name` — auto orphan-cleanup before spawn, auto `docker rm -f` on shutdown |
 
 Run any example:
 

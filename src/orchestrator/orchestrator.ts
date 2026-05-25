@@ -22,6 +22,7 @@ import {
   type ProcessState,
 } from './lifecycle.js';
 import { runHook, type HookKind } from './hooks.js';
+import { applyDockerDefaults, runDockerOrphanCleanup } from './docker.js';
 import { PreflightError, runPreflight, type PreflightResult } from './preflight.js';
 
 export interface BootSummary {
@@ -313,6 +314,11 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   private async spawnAndAwaitReady(name: string): Promise<void> {
     const handle = this.requireHandle(name);
 
+    // For `type: docker`, nuke any container left over from a previous run
+    // before pre_start. Failures are swallowed inside the helper — the upcoming
+    // `docker run` will surface the real error if docker itself is broken.
+    await runDockerOrphanCleanup(handle.config);
+
     await this.runHookSafe(name, 'pre_start');
 
     this.applyEvent(name, { kind: 'start' });
@@ -525,7 +531,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.emit('process:state', name, next);
   }
 
-  private makeHandle(config: ProcessConfig): Handle {
+  private makeHandle(rawConfig: ProcessConfig): Handle {
+    const config = applyDockerDefaults(rawConfig);
     return {
       state: 'pending',
       config,

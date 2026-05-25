@@ -67,9 +67,10 @@ Waves are computed automatically — `api` and `worker` would run in parallel if
 
 ## `type`
 
-- `type: bash` — default. Use unless one of the next two applies.
+- `type: bash` — default. Use unless one of the next three applies.
 - `type: webpack` — only when *this process's* stdout is real webpack output. Adds a parser that emits `build:start`/`build:complete` events the reporter uses for progress display. Wrong `type` is not fatal — you just lose the progress UI.
 - `type: angular` — same idea for Angular CLI output.
+- `type: docker` — the process **is** a `docker run --name <X> ...`. Requires `container_name: <X>` (must match the `--name=`). Orckit then (a) runs `docker rm -f <X>` before every spawn to nuke a container leftover from a previous crashed run, and (b) defaults `stop_command` to `docker rm -f <X>` so Ctrl-C actually tears the container down. Prefer this over `type: bash` + a manual `stop_command` for plain `docker run` — less to keep in sync. Stay on `type: bash` for `docker compose up` (use `stop_command: docker compose down`) or anything where you don't have a single container_name.
 
 Do not pick `webpack`/`angular` just because the project uses webpack/angular somewhere. Pick it based on what the *command in this process* prints.
 
@@ -144,6 +145,8 @@ The flow on Ctrl-C: orckit runs `docker stop app-db` → dockerd sends SIGTERM t
 
 Use it whenever you see `docker run`, `docker compose up`, `kubectl port-forward`, `ngrok http`, or any other foreground CLI that proxies a daemon-managed resource. Pair `docker run` with `--name=<n>` so the stop command has a stable handle. For `docker compose up`, the natural pairing is `stop_command: docker compose down`.
 
+**Prefer `type: docker`** for the plain `docker run --name X ...` case — it auto-derives `stop_command: docker rm -f X` AND runs the same `docker rm -f X` before every spawn to clear orphans from a previous crash. Only fall back to manual `stop_command` for shapes the docker type can't express (compose, multi-container, no stable container name).
+
 Don't set it on plain processes (node, python, etc.) — SIGTERM is correct there and `stop_command` would just be extra config to keep in sync.
 
 ## `output` filters
@@ -196,7 +199,8 @@ Do **not** enable it just because you can — for short-lived dev sessions, the 
 4. Every preflight check has an actionable `on_fail` message.
 5. `restart` policy matches the process's nature (long-running vs one-shot).
 6. `manual_retry: true` only on processes whose failure means "external thing isn't ready" — not on regular services.
-7. No secrets in `env`.
+7. Plain `docker run --name X` processes use `type: docker` + `container_name: X` (not `type: bash` + manual `stop_command`). The `container_name` must match the `--name=` in `command`.
+8. No secrets in `env`.
 
 ## Programmatic API
 
