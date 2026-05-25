@@ -4,6 +4,7 @@ import chalk from 'chalk';
 
 export type ReplCommand =
   | { kind: 'retry'; targets: string[]; cascade: boolean }
+  | { kind: 'start'; targets: string[] }
   | { kind: 'status' }
   | { kind: 'help' }
   | { kind: 'quit' }
@@ -11,11 +12,13 @@ export type ReplCommand =
   | { kind: 'error'; message: string };
 
 const HELP_TEXT = [
-  '  r [name ...]   retry failed processes (cascades to dependents)',
-  '  r! [name ...]  retry without cascading to dependents',
-  '  s              show current status',
-  '  q              quit',
-  '  ? or h         show this help',
+  '  r [name ...]    retry failed processes (cascades to dependents)',
+  '  r! [name ...]   retry without cascading to dependents',
+  '  start <name>    start a process — typical for optional ones (pulls in deps)',
+  '  + <name>        shorthand for `start`',
+  '  s               show current status',
+  '  q               quit',
+  '  ? or h          show this help',
   '',
   '  with no name, `r` and `r!` operate on every currently-failed process.',
 ].join('\n');
@@ -32,6 +35,15 @@ export function parseReplLine(line: string): ReplCommand {
       return { kind: 'retry', targets: rest, cascade: true };
     case 'r!':
       return { kind: 'retry', targets: rest, cascade: false };
+    case 'start':
+    case '+':
+      if (rest.length === 0) {
+        return {
+          kind: 'error',
+          message: 'usage: start <name> [name ...] — pass at least one process name',
+        };
+      }
+      return { kind: 'start', targets: rest };
     case 's':
     case 'status':
       return { kind: 'status' };
@@ -50,6 +62,7 @@ export function parseReplLine(line: string): ReplCommand {
 
 export interface ReplHandlers {
   retry(targets: string[], cascade: boolean): Promise<void>;
+  start(targets: string[]): Promise<void>;
   status(): void;
   quit(): Promise<void>;
 }
@@ -108,6 +121,9 @@ export function attachRepl(handlers: ReplHandlers, options: ReplOptions = {}): R
           break;
         case 'retry':
           await handlers.retry(cmd.targets, cmd.cascade);
+          break;
+        case 'start':
+          await handlers.start(cmd.targets);
           break;
         case 'quit':
           await handlers.quit();

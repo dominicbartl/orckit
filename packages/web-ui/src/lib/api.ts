@@ -36,3 +36,11 @@ export async function stopProcess(name: string): Promise<void> {
     throw new Error(body.error ?? `stop failed: ${res.status}`);
   }
 }
+
+export async function startProcess(name: string): Promise<void> {
+  const res = await fetch(`/api/start/${encodeURIComponent(name)}`, { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `start failed: ${res.status}`);
+  }
+}

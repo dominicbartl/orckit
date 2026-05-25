@@ -88,6 +88,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: 12041,
     startedAt: Date.now() - 60_000,
     retries: 0,
+    optional: false,
   },
   {
     name: 'redis',
@@ -99,6 +100,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: null,
     startedAt: null,
     retries: 2,
+    optional: false,
     lastError: 'exited (code 1) — port 6379 in use',
   },
   {
@@ -111,6 +113,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: null,
     startedAt: Date.now() - 50_000,
     retries: 0,
+    optional: false,
   },
   {
     name: 'api',
@@ -122,6 +125,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: 12101,
     startedAt: Date.now() - 30_000,
     retries: 0,
+    optional: false,
   },
   {
     name: 'web',
@@ -133,6 +137,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: 12180,
     startedAt: Date.now() - 5000,
     retries: 0,
+    optional: false,
   },
   {
     name: 'worker',
@@ -144,6 +149,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     pid: null,
     startedAt: null,
     retries: 0,
+    optional: false,
   },
 ];
 

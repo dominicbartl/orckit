@@ -19,10 +19,10 @@ import {
   groupByCategory,
 } from '../components/ProcessGroup';
 import { BrandMark } from '../components/Brand';
-import { IconRestart, IconStop, IconLogs, IconAlert, IconCopy } from '../lib/icons';
+import { IconPlay, IconRestart, IconStop, IconLogs, IconAlert, IconCopy } from '../lib/icons';
 import { useOrckit } from '../lib/stream';
 import { useToasts } from '../lib/toasts';
-import { restartProcess, stopProcess } from '../lib/api';
+import { restartProcess, startProcess, stopProcess } from '../lib/api';
 import type { OutputLine, ProcessSnapshot } from '../lib/types';
 import { cx } from '../lib/cx';
 
@@ -85,6 +85,7 @@ function DashboardInner() {
                 processes={group}
                 selectedName={selected()}
                 onSelect={(name) => setSelected(name)}
+                onStart={(name) => void actions.start(name)}
                 onRestart={(name) => void actions.restart(name)}
                 onStop={(name) => void actions.stop(name)}
               />
@@ -202,6 +203,8 @@ function DetailHeader(props: { process: Accessor<ProcessSnapshot> }) {
   const p = () => props.process();
   const actions = useProcessActions();
   const canStop = () => ['starting', 'ready', 'running'].includes(p().state);
+  const canStart = () => ['pending', 'stopped', 'failed', 'finished'].includes(p().state);
+  const [starting, setStarting] = createSignal(false);
   const [restarting, setRestarting] = createSignal(false);
   const [stopping, setStopping] = createSignal(false);
 
@@ -236,39 +239,60 @@ function DetailHeader(props: { process: Accessor<ProcessSnapshot> }) {
           </div>
         </div>
         <div class="flex items-center gap-1.5 flex-shrink-0">
-          <Button
-            size="md"
-            variant="secondary"
-            leadingIcon={<IconRestart width={13} height={13} />}
-            loading={restarting()}
-            onClick={async () => {
-              setRestarting(true);
-              try {
-                await actions.restart(p().name);
-              } finally {
-                setRestarting(false);
-              }
-            }}
-          >
-            Restart
-          </Button>
-          <Button
-            size="md"
-            variant="danger"
-            leadingIcon={<IconStop width={13} height={13} />}
-            disabled={!canStop()}
-            loading={stopping()}
-            onClick={async () => {
-              setStopping(true);
-              try {
-                await actions.stop(p().name);
-              } finally {
-                setStopping(false);
-              }
-            }}
-          >
-            Stop
-          </Button>
+          <Show when={canStart()}>
+            <Button
+              size="md"
+              variant="primary"
+              leadingIcon={<IconPlay width={13} height={13} />}
+              loading={starting()}
+              onClick={async () => {
+                setStarting(true);
+                try {
+                  await actions.start(p().name);
+                } finally {
+                  setStarting(false);
+                }
+              }}
+            >
+              Start
+            </Button>
+          </Show>
+          <Show when={!canStart()}>
+            <Button
+              size="md"
+              variant="secondary"
+              leadingIcon={<IconRestart width={13} height={13} />}
+              loading={restarting()}
+              onClick={async () => {
+                setRestarting(true);
+                try {
+                  await actions.restart(p().name);
+                } finally {
+                  setRestarting(false);
+                }
+              }}
+            >
+              Restart
+            </Button>
+          </Show>
+          <Show when={canStop()}>
+            <Button
+              size="md"
+              variant="danger"
+              leadingIcon={<IconStop width={13} height={13} />}
+              loading={stopping()}
+              onClick={async () => {
+                setStopping(true);
+                try {
+                  await actions.stop(p().name);
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
+              Stop
+            </Button>
+          </Show>
         </div>
       </div>
     </header>
@@ -389,6 +413,19 @@ function Field(props: { label: string; value: import('solid-js').JSX.Element; mo
 function useProcessActions() {
   const toasts = useToasts();
   return {
+    async start(name: string) {
+      try {
+        await startProcess(name);
+        toasts.push({ tone: 'success', title: `Started ${name}` });
+      } catch (err) {
+        toasts.push({
+          tone: 'danger',
+          title: `Start failed: ${name}`,
+          description: (err as Error).message,
+          ttl: 6000,
+        });
+      }
+    },
     async restart(name: string) {
       try {
         await restartProcess(name);

@@ -34,10 +34,7 @@ const MIME: Record<string, string> = {
 export function resolveStaticDir(): string | null {
   const thisDir = dirname(fileURLToPath(import.meta.url));
 
-  const candidates = [
-    join(thisDir, 'static'),
-    resolve(thisDir, '../../packages/web-ui/dist'),
-  ];
+  const candidates = [join(thisDir, 'static'), resolve(thisDir, '../../packages/web-ui/dist')];
 
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'index.html'))) return candidate;

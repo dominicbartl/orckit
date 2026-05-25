@@ -75,10 +75,10 @@ export {
 } from './reporter/log-reporter.js';
 export { renderGraph, type RenderGraphOptions } from './reporter/graph-view.js';
 export {
-  attachLiveBootView,
-  type LiveBootViewOptions,
-  type LiveBootViewHandle,
-} from './reporter/live-view.js';
+  attachDashboard,
+  type DashboardOptions,
+  type DashboardHandle,
+} from './reporter/dashboard.js';
 
 export { attachMcpServer, type McpServerOptions, type McpServerHandle } from './mcp/server.js';
 export { attachWebUi, type WebUiServerOptions, type WebUiServerHandle } from './web/server.js';

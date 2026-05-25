@@ -39,15 +39,14 @@ export interface CliReporterOptions {
    */
   printHint?: (message: string) => void;
   /**
-   * Where to send output. Defaults to `console.log`. The live boot view passes
-   * its `printAbove` so reporter output flows above the live graph cleanly.
+   * Where to send output. Defaults to `console.log`. The dashboard passes its
+   * `printAbove` so reporter output flows above the live region cleanly.
    */
   out?: (msg: string) => void;
   /**
-   * Suppress per-process lifecycle event lines (starting / ready / finished /
-   * stopped / failed / restarting). Set this when another consumer — the live
-   * boot view — owns the rendering of those state changes. Failure tails
-   * (the recent-output dump) are still printed.
+   * Suppress per-process lifecycle lines + the all-ready and boot-complete
+   * banners. Set this when the dashboard is owning state rendering. Failure
+   * tails (the recent-output dump) and preflight results still print.
    */
   quietProcessEvents?: boolean;
 }
@@ -85,10 +84,11 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     if (tailLines > 0) {
       const tail = orckit.output(name, tailLines);
       if (quiet && tail.length > 0) {
-        // The live view consumes the "failed" headline itself, but the user
-        // still wants to see WHY — print a short prefix so the dump is
-        // recognisable in scrollback.
-        out(`  ${chalk.red(STATE_ICON.failed)} ${name} failed${err ? `: ${chalk.red(err.message)}` : ''}`);
+        // The dashboard turns the row red itself, but the user still wants to
+        // see WHY — print a short prefix so the dump is recognisable.
+        out(
+          `  ${chalk.red(STATE_ICON.failed)} ${name} failed${err ? `: ${chalk.red(err.message)}` : ''}`,
+        );
       }
       for (const line of tail) {
         const marker = line.stream === 'stderr' ? chalk.red('!') : chalk.red('│');
@@ -114,9 +114,12 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
       if (r.onFail) out(chalk.dim(`      hint: ${r.onFail}`));
     }
   };
-  const onAllReady = (names: string[]) =>
+  const onAllReady = (names: string[]) => {
+    if (quiet) return;
     out(chalk.green.bold(`\n  ✓ ${names.length} process(es) ready\n`));
+  };
   const onBootComplete = (summary: BootSummary) => {
+    if (quiet) return;
     if (summary.failed.length === 0 && summary.pending.length === 0) return;
     const parts: string[] = [];
     if (summary.failed.length > 0) {
@@ -130,9 +133,6 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     if (summary.ready.length > 0) {
       parts.unshift(chalk.green(`${summary.ready.length} ready`));
     }
-    // When the boot is about to die because something failed without
-    // manual_retry, don't suggest a retry — the CLI will print its own
-    // diagnostic and exit.
     if (summary.strictFailures.length > 0) {
       hint(`  ${parts.join('  ')}`);
       return;
@@ -181,6 +181,48 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     if (onLine) orckit.off('process:line', onLine);
     if (onBuild) orckit.off('process:build', onBuild);
   };
+}
+
+/**
+ * Print a per-process "what went wrong" dump for the named failed processes.
+ * Called after a boot failure tears the live view down — by that point the
+ * inline tails the cli-reporter emitted during boot have scrolled off, and
+ * for processes that died before producing any output (port conflicts,
+ * missing binaries, bad cwd) nothing was printed at all. The dump prints a
+ * header, the captured error message, and the tail of the buffer so the user
+ * has a single, scannable block of context for each failure.
+ */
+export function printFailureDump(
+  orckit: Orckit,
+  names: string[],
+  lastErrors: ReadonlyMap<string, string>,
+  opts: { out?: (msg: string) => void; tailLines?: number } = {},
+): void {
+  if (names.length === 0) return;
+  const out = opts.out ?? ((m: string) => console.error(m));
+  const tailLines = opts.tailLines ?? 20;
+
+  out('');
+  out(chalk.bold(`  Logs for failed process${names.length > 1 ? 'es' : ''}:`));
+
+  for (const name of names) {
+    out('');
+    const fill = '─'.repeat(Math.max(4, 60 - name.length - 4));
+    out(chalk.red(`  ── ${chalk.bold(name)} ${fill}`));
+
+    const err = lastErrors.get(name);
+    if (err) out(`    ${chalk.red('error:')} ${chalk.red(err)}`);
+
+    const tail = orckit.output(name, tailLines);
+    if (tail.length === 0) {
+      if (!err) out(chalk.dim('    (no output captured)'));
+    } else {
+      for (const line of tail) {
+        const marker = line.stream === 'stderr' ? chalk.red('!') : chalk.dim('│');
+        out(`    ${marker} ${chalk.dim(line.text)}`);
+      }
+    }
+  }
 }
 
 export function renderStatus(states: Map<string, ProcessState>): string {

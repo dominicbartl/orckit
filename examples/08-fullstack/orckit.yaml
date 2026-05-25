@@ -37,7 +37,10 @@ processes:
       PORT: '3004'
       DB_PORT: '5433'
     hooks:
-      pre_start: pnpm install --silent
+      # --ignore-workspace so pnpm treats this dir as a standalone project
+      # rather than walking up to orckit's own pnpm-workspace.yaml (which
+      # would skip the install and leave node_modules empty).
+      pre_start: pnpm install --ignore-workspace --silent
       post_start: echo "[hook] api up — try curl localhost:3004/health"
     ready:
       type: http
@@ -81,7 +84,7 @@ processes:
       PORT: '3005'
       API_URL: http://localhost:3004
     hooks:
-      pre_start: pnpm install --silent
+      pre_start: pnpm install --ignore-workspace --silent
     ready:
       type: log-pattern
       pattern: 'compiled successfully'

@@ -4,6 +4,9 @@ import type { ProcessState } from '../orchestrator/lifecycle.js';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+// Accent — keep in sync with web UI's --color-accent token.
+const ACCENT = '#4fb8c8';
+
 const STATE_ICON: Record<ProcessState, string> = {
   pending: '○',
   starting: SPINNER_FRAMES[0]!, // overridden per-frame by spinnerFrame option
@@ -58,7 +61,11 @@ export function renderGraph(graph: DependencyGraph, opts: RenderGraphOptions = {
 
   const nameWidth = Math.max(0, ...[...graph.keys()].map((n) => n.length));
   const lines: string[] = [];
-  const spinnerIcon = SPINNER_FRAMES[((opts.spinnerFrame ?? 0) % SPINNER_FRAMES.length + SPINNER_FRAMES.length) % SPINNER_FRAMES.length]!;
+  const spinnerIcon =
+    SPINNER_FRAMES[
+      (((opts.spinnerFrame ?? 0) % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) %
+        SPINNER_FRAMES.length
+    ]!;
 
   for (let i = 0; i < waves.length; i++) {
     const wave = waves[i]!;
@@ -71,7 +78,7 @@ export function renderGraph(graph: DependencyGraph, opts: RenderGraphOptions = {
     const subtitle = isFirst ? 'starts immediately' : `after wave ${i}`;
     const parallelHint = wave.length > 1 ? chalk.dim(` (${wave.length} in parallel)`) : '';
     lines.push(
-      `${chalk.dim(corner + '─')} ${chalk.bold.cyan(`Wave ${i + 1}`)} ${chalk.dim('─── ' + subtitle)}${parallelHint}`,
+      `${chalk.dim(corner + '─')} ${chalk.hex(ACCENT).bold(`Wave ${i + 1}`)} ${chalk.dim('─── ' + subtitle)}${parallelHint}`,
     );
 
     const sideBar = isLast ? ' ' : chalk.dim('│');

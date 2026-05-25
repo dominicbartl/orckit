@@ -100,7 +100,10 @@ export const processConfigSchema = z
     container_name: z
       .string()
       .min(1)
-      .regex(DOCKER_NAME_RE, 'invalid Docker container name (must match [a-zA-Z0-9][a-zA-Z0-9_.-]*)')
+      .regex(
+        DOCKER_NAME_RE,
+        'invalid Docker container name (must match [a-zA-Z0-9][a-zA-Z0-9_.-]*)',
+      )
       .optional(),
     cwd: z.string().optional(),
     env: z.record(z.string(), z.string()).default({}),
@@ -121,6 +124,18 @@ export const processConfigSchema = z
      * Default false (strict): a single failure aborts the boot.
      */
     manual_retry: z.boolean().default(false),
+    /**
+     * When true, this process is NOT started by `orc start` with no targets.
+     * Use for ancillary tools you sometimes want (admin UIs, log viewers,
+     * background monitors). To start it:
+     *   - explicitly: `orc start <name>` (starts only it + its deps)
+     *   - additively: `orc start --with <name>` (default set + this)
+     *   - at runtime: `start <name>` at the REPL, or click ▶ in the web UI
+     * A required (non-optional) process is not allowed to `depends_on` an
+     * optional one — that would force the optional one to always start,
+     * defeating the purpose.
+     */
+    optional: z.boolean().default(false),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'docker' && !data.container_name) {
@@ -179,16 +194,35 @@ const webConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
 });
 
-export const orckitConfigSchema = z.object({
-  project: z.string().default('orckit'),
-  processes: z.record(z.string(), processConfigSchema).refine((p) => Object.keys(p).length > 0, {
-    message: 'at least one process is required',
-  }),
-  preflight: z.array(preflightCheckSchema).default([]),
-  logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
-  mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
-  web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
-});
+export const orckitConfigSchema = z
+  .object({
+    project: z.string().default('orckit'),
+    processes: z.record(z.string(), processConfigSchema).refine((p) => Object.keys(p).length > 0, {
+      message: 'at least one process is required',
+    }),
+    preflight: z.array(preflightCheckSchema).default([]),
+    logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
+    mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
+    web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
+  })
+  .superRefine((data, ctx) => {
+    // A required process can't depend on an optional one — if `optional: true`
+    // is honored, the required process would never start; if we silently
+    // override the optional flag, the user's intent is lost. Reject early.
+    for (const [name, process] of Object.entries(data.processes)) {
+      if (process.optional) continue;
+      for (const depName of process.depends_on) {
+        const dep = data.processes[depName];
+        if (dep?.optional) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['processes', name, 'depends_on'],
+            message: `required process "${name}" cannot depend on optional process "${depName}" — either mark "${name}" optional too, or drop "optional: true" from "${depName}"`,
+          });
+        }
+      }
+    }
+  });
 
 export type OrckitConfig = z.infer<typeof orckitConfigSchema>;
 export type ProcessConfig = z.infer<typeof processConfigSchema>;

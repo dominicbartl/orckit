@@ -12,6 +12,7 @@ export interface ProcessSnapshot {
   pid: number | null;
   startedAt: number | null;
   retries: number;
+  optional: boolean;
   lastError?: string;
 }
 
@@ -43,6 +44,7 @@ export function buildSnapshot(orckit: Orckit, ctx: SnapshotContext): OrckitSnaps
       pid: inspect.pid,
       startedAt: inspect.startedAt,
       retries: inspect.retries,
+      optional: processConfig.optional,
       lastError: ctx.lastErrors.get(name),
     });
   }

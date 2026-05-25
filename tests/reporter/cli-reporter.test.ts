@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { attachCliReporter } from '../../src/reporter/cli-reporter.js';
+import { attachCliReporter, printFailureDump } from '../../src/reporter/cli-reporter.js';
 import type { Orckit } from '../../src/orchestrator/orchestrator.js';
 import type { OutputLine } from '../../src/process/output.js';
 
@@ -99,5 +99,44 @@ describe('attachCliReporter — failure tail', () => {
     const calls = logSpy.mock.calls.map((c) => c[0] as string);
     expect(calls.length).toBe(1);
     expect(calls[0]).toContain('api failed');
+  });
+});
+
+describe('printFailureDump', () => {
+  it('prints a header + error + tail block per failed process', () => {
+    const outputs = new Map<string, OutputLine[]>([
+      ['db', [line('listening on 5432'), line('ERR: shutting down', 'stderr')]],
+      ['api', []],
+    ]);
+    const orckit = makeFakeOrckit(outputs);
+    const errors = new Map([
+      ['db', 'exited (code 1)'],
+      ['api', 'spawn bash ENOENT'],
+    ]);
+    const captured: string[] = [];
+
+    printFailureDump(orckit, ['db', 'api'], errors, { out: (m) => captured.push(m) });
+
+    const text = captured.join('\n');
+    expect(text).toMatch(/Logs for failed processes/);
+    expect(text).toMatch(/── db /);
+    expect(text).toContain('exited (code 1)');
+    expect(text).toContain('listening on 5432');
+    expect(text).toContain('ERR: shutting down');
+    expect(text).toMatch(/── api /);
+    expect(text).toContain('spawn bash ENOENT');
+  });
+
+  it('renders "(no output captured)" when there is neither error nor buffered output', () => {
+    const orckit = makeFakeOrckit();
+    const captured: string[] = [];
+    printFailureDump(orckit, ['ghost'], new Map(), { out: (m) => captured.push(m) });
+    expect(captured.join('\n')).toContain('(no output captured)');
+  });
+
+  it('does nothing when the failed list is empty', () => {
+    const captured: string[] = [];
+    printFailureDump(makeFakeOrckit(), [], new Map(), { out: (m) => captured.push(m) });
+    expect(captured).toEqual([]);
   });
 });

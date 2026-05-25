@@ -26,6 +26,14 @@ describe('processConfigSchema', () => {
     expect(parsed.manual_retry).toBe(true);
   });
 
+  it('optional defaults to false', () => {
+    expect(processConfigSchema.parse({ command: 'x' }).optional).toBe(false);
+  });
+
+  it('accepts optional: true', () => {
+    expect(processConfigSchema.parse({ command: 'x', optional: true }).optional).toBe(true);
+  });
+
   it('stop_command is optional and defaults to undefined', () => {
     const parsed = processConfigSchema.parse({ command: 'echo hi' });
     expect(parsed.stop_command).toBeUndefined();
@@ -223,6 +231,37 @@ describe('orckitConfigSchema', () => {
         mcp: { port: 7676.5 },
       }),
     ).toThrow();
+  });
+
+  it('rejects required process depending on optional', () => {
+    expect(() =>
+      orckitConfigSchema.parse({
+        processes: {
+          tool: { command: 'echo tool', optional: true },
+          required: { command: 'echo req', depends_on: ['tool'] },
+        },
+      }),
+    ).toThrow(/cannot depend on optional/);
+  });
+
+  it('allows optional process depending on another optional', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: {
+        toolA: { command: 'echo a', optional: true },
+        toolB: { command: 'echo b', optional: true, depends_on: ['toolA'] },
+      },
+    });
+    expect(parsed.processes.toolB?.depends_on).toEqual(['toolA']);
+  });
+
+  it('allows optional process depending on a required one', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: {
+        core: { command: 'echo core' },
+        admin: { command: 'echo admin', optional: true, depends_on: ['core'] },
+      },
+    });
+    expect(parsed.processes.admin?.optional).toBe(true);
   });
 
   it('accepts a complete configuration', () => {

@@ -1,14 +1,15 @@
 import { type JSX, Show } from 'solid-js';
 import { cx } from '../lib/cx';
 import type { ProcessSnapshot } from '../lib/types';
-import { StateBadge } from './Badge';
+import { Badge, StateBadge } from './Badge';
 import { IconButton } from './IconButton';
-import { IconRestart, IconStop, IconChevron } from '../lib/icons';
+import { IconRestart, IconStop, IconPlay, IconChevron } from '../lib/icons';
 
 export interface ProcessRowProps {
   process: ProcessSnapshot;
   selected?: boolean;
   onSelect?: () => void;
+  onStart?: () => void;
   onRestart?: () => void;
   onStop?: () => void;
   trailing?: JSX.Element;
@@ -16,9 +17,11 @@ export interface ProcessRowProps {
 }
 
 export function ProcessRow(props: ProcessRowProps) {
-  const canStop = () =>
-    ['starting', 'ready', 'running'].includes(props.process.state);
+  const canStop = () => ['starting', 'ready', 'running'].includes(props.process.state);
   const canRestart = () => props.process.state !== 'pending';
+  // An optional or stopped process can be started. Pending == hasn't run yet.
+  const canStart = () =>
+    ['pending', 'stopped', 'failed', 'finished'].includes(props.process.state);
 
   return (
     <div
@@ -47,6 +50,9 @@ export function ProcessRow(props: ProcessRowProps) {
             {props.process.name}
           </span>
           <StateBadge state={props.process.state} />
+          <Show when={props.process.optional}>
+            <Badge tone="neutral">optional</Badge>
+          </Show>
           <Show when={props.process.retries > 0}>
             <span class="text-[10px] uppercase tracking-wider font-mono text-fg-tertiary">
               retry ×{props.process.retries}
@@ -66,10 +72,27 @@ export function ProcessRow(props: ProcessRowProps) {
       <div
         class={cx(
           'flex items-center gap-1 transition-opacity',
-          props.selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+          // Pending-optional rows always show controls so the user can find
+          // the ▶ start button without hovering each row to discover it.
+          props.selected || (props.process.optional && props.process.state === 'pending')
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100',
         )}
       >
-        <Show when={props.onRestart}>
+        <Show when={props.onStart && canStart()}>
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label="start"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onStart?.();
+            }}
+          >
+            <IconPlay width={14} height={14} />
+          </IconButton>
+        </Show>
+        <Show when={props.onRestart && !canStart()}>
           <IconButton
             size="sm"
             variant="ghost"
@@ -83,12 +106,11 @@ export function ProcessRow(props: ProcessRowProps) {
             <IconRestart width={14} height={14} />
           </IconButton>
         </Show>
-        <Show when={props.onStop}>
+        <Show when={props.onStop && canStop()}>
           <IconButton
             size="sm"
             variant="ghost"
             label="stop"
-            disabled={!canStop()}
             onClick={(e) => {
               e.stopPropagation();
               props.onStop?.();

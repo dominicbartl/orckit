@@ -29,14 +29,10 @@ const ORPHAN_CLEANUP_TIMEOUT_MS = 30_000;
  */
 export async function runDockerOrphanCleanup(config: ProcessConfig): Promise<void> {
   if (config.type !== 'docker' || !config.container_name) return;
-  await execa(
-    'bash',
-    ['-c', `docker rm -f ${config.container_name} >/dev/null 2>&1 || true`],
-    {
-      cwd: config.cwd ?? process.cwd(),
-      env: mergeEnv(config.env),
-      reject: false,
-      timeout: ORPHAN_CLEANUP_TIMEOUT_MS,
-    },
-  );
+  await execa('bash', ['-c', `docker rm -f ${config.container_name} >/dev/null 2>&1 || true`], {
+    cwd: config.cwd ?? process.cwd(),
+    env: mergeEnv(config.env),
+    reject: false,
+    timeout: ORPHAN_CLEANUP_TIMEOUT_MS,
+  });
 }

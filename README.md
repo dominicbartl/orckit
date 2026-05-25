@@ -48,17 +48,27 @@ npx orc validate          # check config + print dependency graph
 npx orc list              # list processes
 npx orc start             # boot everything in dependency order
 npx orc start api         # boot just api (and its deps)
-npx orc start --show-output     # also stream stdout/stderr to the terminal post-boot
-npx orc start --no-live         # disable the animated boot view (plain line-by-line output)
+npx orc start --show-output     # stream stdout/stderr to the terminal above the dashboard
+npx orc start --no-live         # disable the persistent dashboard (plain line-by-line output)
 npx orc start --mcp-port 7700   # override the YAML mcp.port
 npx orc start --no-mcp          # force-disable the built-in MCP server
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
 
-### Live boot view
+### Live dashboard
 
-When stdout is a TTY, `orc start` renders the dependency graph as a live region at the bottom of the terminal: each process row shows an icon (`○` pending, `⠋` animated while starting, `✓` ready, `✗` failed) and the elapsed time once it settles. Process output streams above the graph during the boot phase so you can see what's happening while a slow process is still spinning. After all processes are ready (or the boot fails), the live region freezes — the final graph stays in scrollback — and the reporter falls back to plain line-by-line output for runtime events. Pass `--no-live` to skip the live view entirely.
+When stdout is a TTY, `orc start` pins a persistent dashboard to the bottom of the terminal for the whole session. It has three regions:
+
+- **Header** — the orckit brand mark, project name, and labelled links to the web dashboard, MCP server, and log directory (whichever are enabled).
+- **Dependency graph** — wave-grouped tree with a state icon per process (`○` pending, `⠋` animated while starting, `✓` ready, `✗` failed) and elapsed time once it settles. Webpack/Angular builds annotate their row with `building 67%`, `built 1.2s`, or `build failed`.
+- **Footer** — `N/total ready · N building · N starting · N failed` counters that update live.
+
+Preflight banners, failure tails (the recent stdout/stderr dump after a process dies), and `--show-output` lines print *above* the dashboard so they stay in scrollback while the live region keeps tracking state below them.
+
+The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
+
+Pass `--no-live` to skip the dashboard entirely and get plain line-by-line lifecycle output plus the REPL.
 
 ## Configuration reference
 
@@ -131,6 +141,16 @@ processes:
     #             dependents `pending`; you fix the issue and type `r <name>`
     #             at the prompt to retry. Use for processes that depend on
     #             external infra you control (Docker daemon, VPN, etc).
+
+    optional: true         # default: false
+    # When false: included in the default `orc start` run.
+    # When true:  skipped by default. Start it explicitly with
+    #             `orc start <name>` (just this + deps), additively with
+    #             `orc start --with <name>` (default set + this), at runtime
+    #             with `start <name>` in the REPL, or by clicking ▶ in the
+    #             web UI. A required process is not allowed to `depends_on`
+    #             an optional one — that would force the optional one to
+    #             always start.
 
     hooks:
       pre_start: 'npm install'
@@ -293,6 +313,8 @@ type `r api` to retry, ? for help
 |---|---|
 | `r [name ...]` | retry failed processes; cascade to dependents (default) |
 | `r! [name ...]` | retry without cascading to dependents |
+| `start <name>` | start a process (typical for optional ones); pulls in deps |
+| `+ <name>` | shorthand for `start` |
 | `s` | print current status table |
 | `q` | quit (same as Ctrl-C) |
 | `?` / `h` | help |

@@ -10,6 +10,7 @@ interface ProcessGroupProps {
   processes: ProcessSnapshot[];
   selectedName: string | null;
   onSelect: (name: string) => void;
+  onStart: (name: string) => void;
   onRestart: (name: string) => void;
   onStop: (name: string) => void;
   defaultOpen?: boolean;
@@ -58,6 +59,7 @@ export function ProcessGroup(props: ProcessGroupProps) {
                 process={p}
                 selected={p.name === props.selectedName}
                 onSelect={() => props.onSelect(p.name)}
+                onStart={() => props.onStart(p.name)}
                 onRestart={() => props.onRestart(p.name)}
                 onStop={() => props.onStop(p.name)}
               />

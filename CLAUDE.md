@@ -40,7 +40,20 @@ src/
     orchestrator.ts   # Orckit class — coordinates everything, emits events
 
   reporter/
-    cli-reporter.ts   # Subscribes to Orckit events, writes to console
+    dashboard.ts      # attachDashboard — persistent live region (brand header +
+                      # dependency graph + counter footer). Owns lifecycle +
+                      # build-state rendering for the whole session on a TTY.
+    cli-reporter.ts   # Preflight banner, failure-tail dump, optional
+                      # --show-output / --show-build streams. Rides above the
+                      # dashboard via its printAbove sink.
+    graph-view.ts     # Pure renderGraph(graph, opts) — wave-grouped tree used
+                      # by `orc validate` AND the dashboard.
+    brand.ts          # ANSI brand mark (mirrors the SVG bars in web-ui),
+                      # plus brandHeader(labels) for the dashboard top region.
+    log-reporter.ts   # Per-process .log files, one writer per process.
+    repl.ts           # Plain-mode interactive prompt (r / r! / s / q).
+                      # Not attached when the dashboard is on — browser owns
+                      # the action surface in that mode.
     debug.ts          # Minimal namespaced logger (ORCKIT_DEBUG=ns1,ns2)
 
   mcp/
@@ -113,7 +126,18 @@ Mark a process `manual_retry: true` to let its boot failure be recoverable: `sta
 
 `kickPending` is suppressed while `inStartLoop` is true (during initial boot AND during `restart()`'s start loop), so the wave/loop driver doesn't race a fire-and-forget kick on the same process.
 
-The interactive REPL in `src/cli.ts` (`reporter/repl.ts`) is the user-facing surface: typing `r backend` calls `restart(['backend'], { cascade: true })`. It attaches to stdin only when stdin is a TTY and `--no-repl` was not passed.
+The interactive REPL in `src/cli.ts` (`reporter/repl.ts`) is the plain-mode action surface: typing `r backend` calls `restart(['backend'], { cascade: true })`. It only attaches when the persistent dashboard is *not* active (`--no-live` or non-TTY) — when the dashboard is on, the browser owns restart/stop instead. `--no-repl` further opts out of attaching it in plain mode.
+
+### Optional processes
+
+A process with `optional: true` is *not* part of the default boot set. To run one:
+- explicit target: `orc start <name>` boots only it + its deps
+- additive: `orc start --with <name>` boots the default set + this one
+- at runtime: `start <name>` in the REPL or `POST /api/start/:name` from the web UI — both call `orckit.startTargets([name])`, which resolves transitive deps, skips already-running shared deps, and does **not** emit `boot:complete` or throw `BootFailedError` (the caller asked for it, so failures are theirs to handle).
+
+Cross-process schema validation in `orckitConfigSchema` rejects a required process declaring `depends_on` on an optional one: an optional that's force-started by another process can't really be optional, so it's a config bug.
+
+Snapshot exposes `optional: boolean` so the web UI can render a ▶ start button for pending optionals.
 
 ## MCP server: how Claude Code queries a running orckit
 

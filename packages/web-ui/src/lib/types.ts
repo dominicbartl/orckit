@@ -33,6 +33,7 @@ export interface ProcessSnapshot {
   pid: number | null;
   startedAt: number | null;
   retries: number;
+  optional: boolean;
   lastError?: string;
 }
 

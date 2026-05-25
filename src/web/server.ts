@@ -32,6 +32,7 @@ export interface WebUiServerHandle {
  *   GET  /api/output/:name    → recent N lines from a process buffer
  *   GET  /events              → SSE stream of orckit events
  *   POST /api/restart/:name   → restart a process (cascade by default)
+ *   POST /api/start/:name     → start a process (+ deps, skipping running ones)
  *   POST /api/stop/:name      → stop a process
  *
  * Follows the same shape as `attachMcpServer`: subscribes to events, returns
@@ -100,6 +101,17 @@ export async function attachWebUi(
       const name = decodeURIComponent(path.slice('/api/restart/'.length));
       try {
         await orckit.restart([name]);
+        sendJson(res, 200, { ok: true });
+      } catch (err) {
+        sendJson(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    if (method === 'POST' && path.startsWith('/api/start/')) {
+      const name = decodeURIComponent(path.slice('/api/start/'.length));
+      try {
+        await orckit.startTargets([name]);
         sendJson(res, 200, { ok: true });
       } catch (err) {
         sendJson(res, 400, { error: (err as Error).message });

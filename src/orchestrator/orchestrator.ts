@@ -116,10 +116,17 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       await this.doPreflight();
     }
 
+    // With explicit targets, honor them as-is (an explicit `orc start foo`
+    // boots an optional foo). Without targets, skip optional processes —
+    // they only start when explicitly named or via startTargets() at runtime.
     const required =
       targets && targets.length > 0
         ? filterToTargets(this.graph, targets)
-        : new Set(resolveStartOrder(this.graph));
+        : new Set(
+            resolveStartOrder(this.graph).filter(
+              (name) => !this.handles.get(name)!.config.optional,
+            ),
+          );
 
     const waves = groupIntoWaves(this.graph)
       .map((wave) => wave.filter((n) => required.has(n)))
@@ -171,6 +178,41 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       await this.stopOne(name);
     }
     this.stopping = false;
+  }
+
+  /**
+   * Start additional processes at runtime, after the initial `start()` boot.
+   * Pulls in transitive dependencies (skipping any already in a ready/running
+   * state). Does NOT emit `boot:complete` or `all:ready`, and does NOT throw
+   * `BootFailedError` — the caller already chose to add these, so a failure
+   * is theirs to handle (typically by retrying via the REPL or web UI).
+   *
+   * Use for optional processes, on-demand admin tools, or anything you didn't
+   * include in the original boot set.
+   */
+  async startTargets(targets: string[]): Promise<void> {
+    if (targets.length === 0) return;
+
+    const required = filterToTargets(this.graph, targets);
+    const order = resolveStartOrder(this.graph).filter((n) => required.has(n));
+
+    this.inStartLoop = true;
+    try {
+      for (const name of order) {
+        const handle = this.requireHandle(name);
+        // Skip anything already healthy — typical case for shared deps that
+        // were started by the initial boot.
+        if (isReadyOrDone(handle.state) || handle.state === 'starting') continue;
+        try {
+          await this.startOne(name);
+        } catch {
+          // failure already emitted; keep going so later targets still get a chance
+        }
+      }
+    } finally {
+      this.inStartLoop = false;
+    }
+    this.kickPending();
   }
 
   async restart(targets: string[], options: RestartOptions = {}): Promise<void> {

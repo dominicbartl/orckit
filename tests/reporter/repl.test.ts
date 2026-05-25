@@ -9,6 +9,8 @@ describe('parseReplLine', () => {
     ['r api web', { kind: 'retry', targets: ['api', 'web'], cascade: true }],
     ['r!', { kind: 'retry', targets: [], cascade: false }],
     ['r! backend', { kind: 'retry', targets: ['backend'], cascade: false }],
+    ['start redis-commander', { kind: 'start', targets: ['redis-commander'] }],
+    ['+ admin ui', { kind: 'start', targets: ['admin', 'ui'] }],
     ['s', { kind: 'status' }],
     ['status', { kind: 'status' }],
     ['q', { kind: 'quit' }],
@@ -26,6 +28,11 @@ describe('parseReplLine', () => {
   it('returns error for unknown commands', () => {
     const result = parseReplLine('foobar');
     expect(result.kind).toBe('error');
+  });
+
+  it('start requires at least one target', () => {
+    expect(parseReplLine('start').kind).toBe('error');
+    expect(parseReplLine('+').kind).toBe('error');
   });
 
   it('trims surrounding whitespace', () => {
@@ -47,13 +54,26 @@ describe('parseReplLine', () => {
 
 describe('attachRepl', () => {
   function makeHandlers(): ReplHandlers & {
-    calls: { retry: Array<[string[], boolean]>; status: number; quit: number };
+    calls: {
+      retry: Array<[string[], boolean]>;
+      start: string[][];
+      status: number;
+      quit: number;
+    };
   } {
-    const calls = { retry: [] as Array<[string[], boolean]>, status: 0, quit: 0 };
+    const calls = {
+      retry: [] as Array<[string[], boolean]>,
+      start: [] as string[][],
+      status: 0,
+      quit: 0,
+    };
     return {
       calls,
       retry: vi.fn(async (targets: string[], cascade: boolean) => {
         calls.retry.push([targets, cascade]);
+      }),
+      start: vi.fn(async (targets: string[]) => {
+        calls.start.push(targets);
       }),
       status: vi.fn(() => {
         calls.status++;
@@ -91,6 +111,21 @@ describe('attachRepl', () => {
     ]);
     expect(handlers.calls.status).toBe(1);
 
+    repl!.detach();
+  });
+
+  it('start handler is invoked with targets', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const handlers = makeHandlers();
+
+    const repl = attachRepl(handlers, { input, output, requireTty: false });
+    input.write('start redis-commander\n');
+    await new Promise((r) => setImmediate(r));
+    input.write('+ admin ui\n');
+    await new Promise((r) => setImmediate(r));
+
+    expect(handlers.calls.start).toEqual([['redis-commander'], ['admin', 'ui']]);
     repl!.detach();
   });
 

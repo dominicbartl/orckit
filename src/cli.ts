@@ -3,13 +3,17 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, ConfigError } from './config/load.js';
 import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
-import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
+import { attachCliReporter, printFailureDump, renderStatus } from './reporter/cli-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
 import { attachWebUi, type WebUiServerHandle } from './web/server.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
-import { attachLiveBootView, type LiveBootViewHandle } from './reporter/live-view.js';
+import {
+  attachDashboard,
+  type DashboardHandle,
+  type DashboardLink,
+} from './reporter/dashboard.js';
 import { buildGraph } from './graph/resolver.js';
 
 const program = new Command()
@@ -62,10 +66,16 @@ program
   .command('start [processes...]')
   .description('Start all processes (or only the listed ones plus their dependencies)')
   .option('-c, --config <path>', 'config file path', './orckit.yaml')
-  .option('--show-output', 'stream process stdout/stderr to terminal after boot', false)
-  .option('--show-build', 'show build events (webpack/angular)', false)
-  .option('--no-repl', 'disable the interactive command prompt')
-  .option('--no-live', 'disable the animated boot view (use plain line-by-line output)')
+  .option('--show-output', 'stream process stdout/stderr to terminal (above the dashboard)', false)
+  .option('--show-build', 'show raw build events as they happen', false)
+  .option('--no-repl', 'disable the interactive command prompt (plain mode only)')
+  .option('--no-live', 'disable the persistent dashboard (use plain line-by-line output)')
+  .option(
+    '-w, --with <name>',
+    'additionally start an optional process (repeatable: -w a -w b)',
+    (value: string, prev: string[] = []) => prev.concat(value),
+    [] as string[],
+  )
   .option('--mcp-port <port>', 'override the YAML mcp.port (must be enabled in config)')
   .option('--no-mcp', 'force-disable the built-in MCP server, overriding YAML')
   .option('--web-port <port>', 'override the YAML web.port (must be enabled in config)')
@@ -79,6 +89,7 @@ program
         showBuild: boolean;
         repl: boolean;
         live: boolean;
+        with: string[];
         mcp: boolean;
         mcpPort?: string;
         web: boolean;
@@ -88,11 +99,30 @@ program
       const config = loadConfig(opts.config);
       const orckit = new Orckit(config);
 
-      let repl: Repl | null = null;
+      // Capture each process's failure message so the boot-failure dump can
+      // show *why* something died — by the time we shut down, the inline
+      // failure tail may have scrolled off and a pre-spawn failure won't
+      // have any buffered output at all. Keep the FIRST error per attempt
+      // (a spawn ENOENT is more useful than the synthetic "exited (code ?)"
+      // that follows it); clear on restart so a fresh attempt starts clean.
+      const lastErrors = new Map<string, string>();
+      orckit.on('process:failed', (name, err) => {
+        if (lastErrors.has(name)) return;
+        lastErrors.set(name, err?.message ?? 'process failed');
+      });
+      orckit.on('process:state', (name, state) => {
+        if (state === 'starting') lastErrors.delete(name);
+      });
+
+      // Links collected here flow into the dashboard header so they live
+      // inside the persistent live region instead of scrolling away as
+      // pre-boot chatter. In plain mode we print them as lines below.
+      const links: DashboardLink[] = [];
+
       let logReporter: LogReporterHandle | null = null;
       if (config.logs.enabled) {
         logReporter = attachLogReporter(orckit, { dir: config.logs.dir });
-        console.log(chalk.dim(`  writing logs to ${logReporter.dir}`));
+        links.push({ label: 'logs', value: logReporter.dir });
       }
 
       const cliMcpEnabled = opts.mcp !== false;
@@ -113,8 +143,7 @@ program
             port: cliMcpPort ?? config.mcp.port,
             host: config.mcp.host,
           });
-          console.log(chalk.dim(`  mcp:  ${mcpServer.url}`));
-          console.log(chalk.dim(`        claude mcp add --transport http orckit ${mcpServer.url}`));
+          links.push({ label: 'mcp', value: mcpServer.url });
         } catch (err) {
           console.error(chalk.yellow(`  mcp server failed to start: ${(err as Error).message}`));
           console.error(
@@ -143,7 +172,8 @@ program
             port: cliWebPort ?? config.web.port,
             host: config.web.host,
           });
-          console.log(chalk.dim(`  web:  ${webServer.url}`));
+          // Web dashboard is the headline action surface — show it first.
+          links.unshift({ label: 'web', value: webServer.url });
         } catch (err) {
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
           console.error(
@@ -154,28 +184,36 @@ program
         }
       }
 
-      // Attach the live boot view AFTER startup chatter (log dir, mcp url) so
-      // those lines stay above the live region in scrollback. Falls back to
-      // null when stdout isn't a TTY (or --no-live was passed); the regular
-      // line-by-line reporter then owns the boot output.
-      const live: LiveBootViewHandle | null = opts.live === false ? null : attachLiveBootView(orckit);
+      // Pick a UI: persistent dashboard if we have a TTY (and --no-live wasn't
+      // passed), otherwise the plain line-by-line reporter + REPL. The
+      // dashboard owns lifecycle rendering for the whole session; the
+      // cli-reporter rides above it for preflight banners, failure tails,
+      // and (optionally) raw output / build events.
+      const dashboard: DashboardHandle | null =
+        opts.live === false ? null : attachDashboard(orckit, { links });
 
-      let detachBootReporter: (() => void) | null = null;
-      if (live) {
-        // While the live graph is showing, the per-process state lines are
-        // redundant — the graph reflects them. Output lines, preflight
-        // results, build events and the boot summary still flow through the
-        // reporter, routed above the live region via printAbove. Logs are
-        // always streamed during the live phase so the user can see what's
-        // happening; --show-output controls post-boot behavior.
-        detachBootReporter = attachCliReporter(orckit, {
-          showOutput: true,
+      let repl: Repl | null = null;
+
+      if (dashboard) {
+        // Links already render in the dashboard header. The browser is the
+        // action surface when the dashboard is on, so the REPL stays detached.
+        attachCliReporter(orckit, {
+          showOutput: opts.showOutput,
           showBuild: opts.showBuild,
-          out: live.printAbove,
+          out: dashboard.printAbove,
           quietProcessEvents: true,
-          printHint: live.printAbove,
+          printHint: dashboard.printAbove,
         });
       } else {
+        // Plain mode: print the header inline (lines, not a live region) so
+        // the user still sees where the web dashboard / MCP / logs landed.
+        if (logReporter) console.log(chalk.dim(`  writing logs to ${logReporter.dir}`));
+        if (mcpServer) {
+          console.log(chalk.dim(`  mcp:  ${mcpServer.url}`));
+          console.log(chalk.dim(`        claude mcp add --transport http orckit ${mcpServer.url}`));
+        }
+        if (webServer) console.log(chalk.dim(`  web:  ${webServer.url}`));
+
         attachCliReporter(orckit, {
           showOutput: opts.showOutput,
           showBuild: opts.showBuild,
@@ -185,10 +223,20 @@ program
 
       let shuttingDown = false;
       const shutdown = async (signal: string, code = 0) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          // User hit Ctrl-C (or sent another signal) while we were trying to
+          // shut down gracefully. Stop waiting on slow processes and exit hard.
+          console.log(
+            chalk.red(`\n  forcing exit on second ${signal} — child processes may be orphaned`),
+          );
+          process.exit(130);
+        }
         shuttingDown = true;
-        live?.dispose();
+        dashboard?.dispose();
         console.log(chalk.yellow(`\n  received ${signal}, stopping...`));
+        console.log(
+          chalk.dim('  (graceful shutdown — press Ctrl-C again to force-quit immediately)'),
+        );
         repl?.detach();
         await orckit.dispose();
         await logReporter?.dispose();
@@ -200,12 +248,34 @@ program
       process.on('SIGINT', () => void shutdown('SIGINT'));
       process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-      const targets = processes.length > 0 ? processes : undefined;
+      // Validate --with names eagerly so we don't spin up an MCP server / web
+      // dashboard before failing.
+      for (const name of opts.with) {
+        if (!(name in config.processes)) {
+          fail(new Error(`--with: unknown process "${name}"`));
+        }
+      }
+      // Targeting precedence:
+      //   - if positional names are given, those are the explicit targets
+      //     (--with is merged in for additive convenience)
+      //   - if no positional names, undefined means "default set" (skipping
+      //     optionals), and --with names are appended so they boot too.
+      let targets: string[] | undefined;
+      if (processes.length > 0) {
+        targets = [...processes, ...opts.with];
+      } else if (opts.with.length > 0) {
+        targets = [
+          ...Object.entries(config.processes)
+            .filter(([, p]) => !p.optional)
+            .map(([n]) => n),
+          ...opts.with,
+        ];
+      }
       try {
         await orckit.start(targets);
       } catch (err) {
         if (err instanceof BootFailedError) {
-          live?.dispose();
+          dashboard?.dispose();
           console.error(chalk.red(`\n  ✗ boot failed: ${err.strictFailures.join(', ')}`));
           console.error(
             chalk.dim(
@@ -213,27 +283,18 @@ program
                 '    fix-and-retry behavior instead of aborting on failure)',
             ),
           );
+          printFailureDump(orckit, err.strictFailures, lastErrors);
           await shutdown('boot failure', 1);
           return;
         }
-        live?.dispose();
+        dashboard?.dispose();
         fail(err);
       }
 
-      if (live) {
-        // Boot's done. Tear down the quiet boot reporter and attach a regular
-        // one so post-boot events (crashes, manual retries, output lines per
-        // user flags) print normally beneath the frozen graph.
-        live.dispose();
-        detachBootReporter?.();
-        attachCliReporter(orckit, {
-          showOutput: opts.showOutput,
-          showBuild: opts.showBuild,
-          printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
-        });
-      }
-
-      if (opts.repl) {
+      // REPL is only attached in plain mode — the persistent dashboard claims
+      // the bottom of the terminal, and the browser dashboard is the action
+      // surface when it's on.
+      if (!dashboard && opts.repl) {
         repl = attachRepl({
           retry: async (givenTargets, cascade) => {
             const states = orckit.states();
@@ -250,6 +311,16 @@ program
               }
             }
             await orckit.restart(targets, { cascade });
+          },
+          start: async (targets) => {
+            const states = orckit.states();
+            for (const name of targets) {
+              if (!states.has(name)) {
+                console.log(chalk.yellow(`  unknown process "${name}"`));
+                return;
+              }
+            }
+            await orckit.startTargets(targets);
           },
           status: () => {
             console.log('');
