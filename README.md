@@ -82,13 +82,14 @@ processes:
 
     ready:                            # optional; without it the process is "ready" as soon as it spawns
       type: http
-      url: http://localhost:3000/health
+      url: http://localhost:3000/health   # if the host is localhost, orckit also verifies
+                                          # the port is FREE before spawn — see note below
       expected_status: 200            # default: 200
       interval_ms: 1000               # default: 1000
       timeout_ms: 60000               # default: 60000
     # or
       type: tcp
-      host: localhost                 # default: localhost
+      host: localhost                 # default: localhost (port-free pre-check applies)
       port: 5432
       timeout_ms: 30000
     # or
@@ -136,6 +137,18 @@ processes:
 - **angular** — same as bash, plus an Angular CLI output parser.
 
 The parsers are best-effort regex against modern tool output and exist purely so the CLI reporter can show useful build status. If you don't care about that, just use `bash`.
+
+### Port-conflict guard
+
+For processes with a `type: tcp` or `type: http` ready check pointing at a localhost port, orckit verifies the port is actually free *before* spawning. If a stale process is still bound to it (a leftover Firestore emulator, a previous `orc start` that didn't shut down cleanly, a forgotten Docker container, etc.), the probe would otherwise immediately connect to that listener and falsely report the new process as `✓ ready (Xms)` — while the new command itself dies with a `port taken` error a moment later. Catching it pre-spawn turns the confusing two-step into a single clear failure:
+
+```
+✗ emulators failed: port 8080 is already in use — another process is bound to it
+  (the ready check would falsely succeed against the existing listener).
+  Stop the other process and retry — `lsof -i :8080` shows what's holding it.
+```
+
+The check is automatic and limited to TCP/HTTP probes on `localhost` / `127.0.0.1` / `0.0.0.0` / `::1`. If you intentionally want a probe to target something not owned by the process (rare), use `type: custom` or `type: log-pattern` instead.
 
 ## Per-process log files
 

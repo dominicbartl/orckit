@@ -49,6 +49,8 @@ A process is "ready" the moment it spawns *unless* it has a `ready` block. Pick 
 - Setting any ready type *other than* `exit-code` on a one-shot command (migrations, codegen). The process exits and the orchestrator treats the early exit as failure. One-shots must use `type: exit-code` or be modelled as a `pre_start` hook on the process that needs them.
 - Omitting `ready` on a process other consumers depend on. Without a ready check, "ready" fires immediately on spawn and dependents start before the upstream is actually serving.
 
+**Port-conflict guard.** Before spawning a process with a `tcp` or `http` ready check on a localhost port, orckit verifies the port is actually free. If something is already bound there (stale process from a previous run, leftover container, port-forward, etc.), the process is failed immediately with a clear error — *without* spawning. This prevents the otherwise-confusing "`✓ ready (8ms)` then `✗ failed: port taken`" sequence where the probe matches the stale listener while the new command can't bind. If you intentionally want to point a ready check at something not owned by this process, use `type: custom` or `type: log-pattern` instead.
+
 ## `depends_on`
 
 Lists other process names that must reach `ready` before this one starts. Use it for real runtime dependencies only — not cosmetic ordering.

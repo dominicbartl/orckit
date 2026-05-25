@@ -33,6 +33,45 @@ export function createProbe(config: Exclude<ReadyCheck, { type: 'exit-code' }>):
   }
 }
 
+/**
+ * Extract the local listen endpoint a ready check targets, if any. Used to
+ * pre-flight that the port is actually free before spawning — otherwise a
+ * stale process on the same port would let the probe report a false "ready"
+ * while the newly spawned command fails to bind. Returns null for checks
+ * that don't pin a local port (log-pattern, custom, or remote-host probes).
+ */
+export function readyCheckLocalEndpoint(
+  ready: ReadyCheck | undefined,
+): { host: string; port: number } | null {
+  if (!ready) return null;
+  if (ready.type === 'tcp') {
+    if (!isLocalHost(ready.host)) return null;
+    return { host: ready.host, port: ready.port };
+  }
+  if (ready.type === 'http') {
+    try {
+      const u = new URL(ready.url);
+      if (!isLocalHost(u.hostname)) return null;
+      const port = u.port
+        ? Number(u.port)
+        : u.protocol === 'https:'
+          ? 443
+          : u.protocol === 'http:'
+            ? 80
+            : NaN;
+      if (!Number.isFinite(port)) return null;
+      return { host: u.hostname, port };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function isLocalHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1';
+}
+
 const ATTEMPT_TIMEOUT_MS = 5000;
 
 class HttpProbe implements HealthProbe {

@@ -8,11 +8,12 @@ import {
   transitiveDependents,
   type DependencyGraph,
 } from '../graph/resolver.js';
-import { createProbe, type HealthProbe } from '../health/checks.js';
+import { createProbe, readyCheckLocalEndpoint, type HealthProbe } from '../health/checks.js';
 import { HealthTimeoutError, waitForReady } from '../health/wait.js';
 import { Runner } from '../process/runner.js';
 import { OutputBuffer, type OutputLine } from '../process/output.js';
 import { getParser, type BuildEvent, type LineParser } from '../process/parsers.js';
+import { isPortFree } from '../util/port.js';
 import {
   isActive,
   isReadyOrDone,
@@ -296,6 +297,24 @@ export class Orckit extends EventEmitter<OrckitEvents> {
 
     this.applyEvent(name, { kind: 'start' });
     this.emit('process:starting', name);
+
+    // Catch the stale-process / port-conflict case before spawn. If the ready
+    // check declares a known local port and something is already listening on
+    // it, the probe would immediately succeed against that listener and
+    // falsely report "ready (Xms)" while the newly spawned command itself
+    // fails to bind — that's the confusing "✓ ready" then "✗ failed" sequence.
+    // Fail fast with a clear error instead.
+    const endpoint = readyCheckLocalEndpoint(handle.config.ready);
+    if (endpoint && !(await isPortFree(endpoint.port, endpoint.host))) {
+      const err = new Error(
+        `port ${endpoint.port} is already in use — another process is bound to it ` +
+          `(the ready check would falsely succeed against the existing listener). ` +
+          `Stop the other process and retry — \`lsof -i :${endpoint.port}\` shows what's holding it.`,
+      );
+      this.applyEvent(name, { kind: 'fail' });
+      this.emit('process:failed', name, err);
+      throw err;
+    }
 
     const runner = new Runner(name, handle.config);
     handle.runner = runner;

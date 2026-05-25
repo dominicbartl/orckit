@@ -1,4 +1,4 @@
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import type { OrckitConfig } from '../../src/config/schema.js';
@@ -13,16 +13,11 @@ function makeConfig(
 
 describe('Orckit end-to-end', () => {
   let orckit: Orckit | null = null;
-  let server: HttpServer | null = null;
 
   afterEach(async () => {
     if (orckit) {
       await orckit.dispose();
       orckit = null;
-    }
-    if (server) {
-      await new Promise<void>((r) => server!.close(() => r()));
-      server = null;
     }
   });
 
@@ -77,26 +72,29 @@ describe('Orckit end-to-end', () => {
   });
 
   it('waits on an HTTP ready check', async () => {
+    // Reserve a free port, then have the spawned process itself bind it —
+    // that matches how the HTTP probe is used in practice (and how the
+    // pre-spawn port-conflict guard expects the world to look).
     const port = await new Promise<number>((resolve) => {
-      server = createHttpServer((_req, res) => {
-        res.statusCode = 200;
-        res.end('ok');
-      });
-      server.listen(0, '127.0.0.1', () => {
-        const addr = server!.address();
-        resolve(typeof addr === 'object' && addr ? addr.port : 0);
+      const reserve = createNetServer();
+      reserve.listen(0, '127.0.0.1', () => {
+        const addr = reserve.address();
+        const p = typeof addr === 'object' && addr ? addr.port : 0;
+        reserve.close(() => resolve(p));
       });
     });
 
     orckit = new Orckit(
       makeConfig({
         web: {
-          command: 'sleep 5',
+          // Tiny HTTP server in Node; sleeps a bit before binding so the probe
+          // actually has to poll a few times.
+          command: `node -e "setTimeout(()=>require('http').createServer((_,r)=>{r.statusCode=200;r.end('ok')}).listen(${port},'127.0.0.1'),250); setInterval(()=>{},1000)"`,
           ready: {
             type: 'http',
             url: `http://127.0.0.1:${port}/`,
             interval_ms: 100,
-            timeout_ms: 3000,
+            timeout_ms: 5000,
           },
         },
       }),
@@ -135,6 +133,29 @@ describe('Orckit end-to-end', () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(orckit.state('worker')).toBe('stopped');
     expect(restarts).toEqual([]);
+  });
+
+  it('does not retry by default — restart is `never` unless opted in', async () => {
+    // A process that crashes after reaching ready should NOT restart by
+    // default. Opting into auto-retry is now a deliberate `restart: on-failure`
+    // (or `always`) choice. This stops silent retry loops on a broken process
+    // from spamming the terminal and obscuring the real error.
+    orckit = new Orckit(
+      makeConfig({
+        crasher: {
+          command: 'echo ready && sleep 0.1 && exit 1',
+          ready: { type: 'log-pattern', pattern: 'ready', timeout_ms: 3000 },
+          manual_retry: true, // so start() doesn't throw on the failure
+        },
+      }),
+    );
+    const restarts: number[] = [];
+    orckit.on('process:restarting', (_n, attempt) => restarts.push(attempt));
+    await orckit.start();
+    // Wait longer than any default restart_delay would have allowed retries
+    await new Promise((r) => setTimeout(r, 800));
+    expect(orckit.state('crasher')).toBe('failed');
+    expect(restarts).toEqual([]); // crucially: no auto-retry was scheduled
   });
 
   it('still restarts on clean exit under restart: always', async () => {
@@ -320,5 +341,66 @@ describe('Orckit end-to-end', () => {
     await orckit.restart(['one']);
     expect(orckit.state('one')).toBe('finished');
     expect(startTimes.length).toBe(2);
+  });
+
+  it('fails fast when the ready-check port is already taken (no false "ready")', async () => {
+    // Hold a port so the orckit process can't bind. Without the pre-spawn
+    // guard, the TCP probe would immediately succeed against this stale
+    // listener and the user would see "ready (Xms)" followed by a confusing
+    // "failed" once the command itself dies trying to bind.
+    const portHolder: NetServer = createNetServer();
+    const port = await new Promise<number>((resolve) => {
+      portHolder.listen(0, '127.0.0.1', () => {
+        const addr = portHolder.address();
+        resolve(typeof addr === 'object' && addr ? addr.port : 0);
+      });
+    });
+    try {
+      const readyEvents: string[] = [];
+      const failedErrors: string[] = [];
+      orckit = new Orckit(
+        makeConfig({
+          emu: {
+            command: 'sleep 30',
+            ready: { type: 'tcp', host: '127.0.0.1', port },
+            restart: 'never',
+            manual_retry: true, // keep start() from throwing so we can inspect
+          },
+        }),
+      );
+      orckit.on('process:ready', (n) => readyEvents.push(n));
+      orckit.on('process:failed', (_n, err) => failedErrors.push(err?.message ?? ''));
+      await orckit.start();
+      expect(orckit.state('emu')).toBe('failed');
+      expect(readyEvents).toEqual([]); // crucially: no false-positive ready event
+      expect(failedErrors[0]).toMatch(/already in use/);
+      expect(failedErrors[0]).toMatch(new RegExp(String(port)));
+    } finally {
+      await new Promise<void>((r) => portHolder.close(() => r()));
+    }
+  });
+
+  it('boots normally when the ready-check port is free', async () => {
+    // Sanity check: the pre-spawn guard does NOT regress the common case.
+    // We use an HTTP server bound on the fly inside the spawned command to
+    // satisfy a TCP probe — the port must be free when start() begins.
+    const port = await new Promise<number>((resolve) => {
+      const probe = createNetServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const addr = probe.address();
+        const p = typeof addr === 'object' && addr ? addr.port : 0;
+        probe.close(() => resolve(p));
+      });
+    });
+    orckit = new Orckit(
+      makeConfig({
+        svc: {
+          command: `node -e "require('net').createServer().listen(${port}, '127.0.0.1', () => {}); setInterval(()=>{},1000)"`,
+          ready: { type: 'tcp', host: '127.0.0.1', port, timeout_ms: 5000 },
+        },
+      }),
+    );
+    await orckit.start();
+    expect(orckit.state('svc')).toBe('running');
   });
 });

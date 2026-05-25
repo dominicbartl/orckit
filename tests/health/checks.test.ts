@@ -1,7 +1,7 @@
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createProbe } from '../../src/health/checks.js';
+import { createProbe, readyCheckLocalEndpoint } from '../../src/health/checks.js';
 
 let httpServer: HttpServer | null = null;
 let tcpServer: NetServer | null = null;
@@ -147,5 +147,122 @@ describe('CustomProbe', () => {
       timeout_ms: 1000,
     });
     expect((await probe.check()).ok).toBe(false);
+  });
+});
+
+describe('readyCheckLocalEndpoint', () => {
+  it('returns the port for a TCP check on localhost', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'tcp',
+        host: 'localhost',
+        port: 5432,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: 'localhost', port: 5432 });
+  });
+
+  it('returns the port for a TCP check on 127.0.0.1', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'tcp',
+        host: '127.0.0.1',
+        port: 8080,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: '127.0.0.1', port: 8080 });
+  });
+
+  it('returns the port for a TCP check on 0.0.0.0', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'tcp',
+        host: '0.0.0.0',
+        port: 8080,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: '0.0.0.0', port: 8080 });
+  });
+
+  it('returns null for a TCP check on a remote host', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'tcp',
+        host: 'example.com',
+        port: 5432,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toBeNull();
+  });
+
+  it('extracts port from an HTTP URL', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'http',
+        url: 'http://localhost:3000/health',
+        expected_status: 200,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: 'localhost', port: 3000 });
+  });
+
+  it('defaults to 80 for http:// without an explicit port', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'http',
+        url: 'http://localhost/health',
+        expected_status: 200,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: 'localhost', port: 80 });
+  });
+
+  it('defaults to 443 for https:// without an explicit port', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'http',
+        url: 'https://localhost/health',
+        expected_status: 200,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toEqual({ host: 'localhost', port: 443 });
+  });
+
+  it('returns null for an HTTP URL pointing at a remote host', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'http',
+        url: 'http://api.example.com/health',
+        expected_status: 200,
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for non-network ready checks', () => {
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'log-pattern',
+        pattern: 'ready',
+        timeout_ms: 1000,
+      }),
+    ).toBeNull();
+    expect(
+      readyCheckLocalEndpoint({
+        type: 'custom',
+        command: 'true',
+        interval_ms: 1000,
+        timeout_ms: 1000,
+      }),
+    ).toBeNull();
+    expect(readyCheckLocalEndpoint(undefined)).toBeNull();
   });
 });
