@@ -230,6 +230,26 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     return this.requireHandle(name).buffer.recent(n);
   }
 
+  /**
+   * Snapshot of a process's runtime metadata. Exposes the bits of the private
+   * `Handle` that consumers (status reporters, MCP server) need without
+   * letting them mutate it.
+   */
+  inspect(name: string): {
+    state: ProcessState;
+    pid: number | null;
+    startedAt: number | null;
+    retries: number;
+  } {
+    const h = this.requireHandle(name);
+    return {
+      state: h.state,
+      pid: h.runner?.pid ?? null,
+      startedAt: h.startedAt,
+      retries: h.retries,
+    };
+  }
+
   async dispose(): Promise<void> {
     await this.stop();
   }

@@ -15,6 +15,7 @@ install` hook bootstrap their dependencies on first run.
 | [`07-custom-ready`](07-custom-ready) | `ready: custom` (arbitrary shell probe) |
 | [`08-fullstack`](08-fullstack) | The lot: preflight, multi-wave deps, webpack parser, filters, hooks, restart, categories |
 | [`09-manual-retry`](09-manual-retry) | Partial-boot tolerance, REPL commands (`r`, `r!`, `s`, `q`), cascade restart, auto-unblock pending |
+| [`10-mcp`](10-mcp) | Built-in MCP server: `mcp:` YAML block, `claude mcp add --transport http`, the three read-only tools |
 
 Run any example:
 

@@ -47,7 +47,9 @@ npx orc validate          # check config + print dependency graph
 npx orc list              # list processes
 npx orc start             # boot everything in dependency order
 npx orc start api         # boot just api (and its deps)
-npx orc start --show-output  # also stream stdout/stderr to the terminal
+npx orc start --show-output     # also stream stdout/stderr to the terminal
+npx orc start --mcp-port 7700   # override the YAML mcp.port
+npx orc start --no-mcp          # force-disable the built-in MCP server
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
@@ -60,6 +62,11 @@ project: my-project          # optional, used in CLI output
 logs:                        # optional; off by default
   enabled: true              # default: false
   dir: .orckit/logs          # default: .orckit/logs (relative to cwd)
+
+mcp:                         # optional; on by default
+  enabled: true              # default: true
+  port: 7676                 # default: 7676
+  host: 127.0.0.1            # default: 127.0.0.1
 
 preflight:                   # optional pre-startup checks (run in parallel)
   - name: docker-up
@@ -171,6 +178,34 @@ Set `logs.enabled: true` at the top level of `orckit.yaml` to write each process
 `stdout` lines are prefixed with two spaces; `stderr` with `! `. `output.suppress` / `include` filters apply (matched-out lines are not written). The CLI reporter still runs as normal — log files are additive. Add `.orckit/` to your `.gitignore` if you store the logs in the repo.
 
 Programmatically: `attachLogReporter(orckit, { dir })` returns a handle with a `dispose()` you must call during teardown.
+
+## MCP server
+
+`orc start` runs a built-in [Model Context Protocol](https://modelcontextprotocol.io) server alongside the orchestrator so Claude Code (or any MCP client) can query process status, errors, and recent output without spawning its own `orc`. You keep running `orc start` in your terminal as usual; the MCP server is reachable in parallel on `127.0.0.1:7676`.
+
+When `orc start` boots, it prints the URL and a one-liner to register it with Claude Code:
+
+```
+  mcp:  http://127.0.0.1:7676/mcp
+        claude mcp add --transport http orckit http://127.0.0.1:7676/mcp
+```
+
+Run that `claude mcp add` command once. From then on, Claude Code can call:
+
+| Tool | Returns |
+|---|---|
+| `get_status` | Every process with state, PID, uptime, retry count, and whether it's `manual_retry: true` |
+| `get_errors` | Failed processes only, with last error message + last ~50 lines of stderr per process |
+| `get_logs` | Recent stdout/stderr for a named process (`{name, lines?, stream?}`) |
+
+When `orc start` isn't running, the MCP tools simply fail to connect — Claude reports that orckit isn't running, no further configuration needed.
+
+Configure via the `mcp:` block in `orckit.yaml`, or override on the command line:
+
+- `--mcp-port <port>` — bind to a different port (also requires `mcp.enabled: true` in YAML).
+- `--no-mcp` — force-disable, overriding YAML.
+
+The server binds to `127.0.0.1` by default. Change `mcp.host` only if you understand the access-control implications — the MCP tools are read-only, but they expose process output that may contain secrets.
 
 ## Programmatic API
 

@@ -98,6 +98,59 @@ describe('orckitConfigSchema', () => {
     expect(parsed.logs).toEqual({ enabled: true, dir: '.orckit/logs' });
   });
 
+  it('applies mcp defaults when block is omitted', () => {
+    const parsed = orckitConfigSchema.parse({ processes: { a: { command: 'echo' } } });
+    expect(parsed.mcp).toEqual({ enabled: true, port: 7676, host: '127.0.0.1' });
+  });
+
+  it('applies mcp defaults when block is empty', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      mcp: {},
+    });
+    expect(parsed.mcp).toEqual({ enabled: true, port: 7676, host: '127.0.0.1' });
+  });
+
+  it('mcp.port partial override keeps other defaults', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      mcp: { port: 7700 },
+    });
+    expect(parsed.mcp).toEqual({ enabled: true, port: 7700, host: '127.0.0.1' });
+  });
+
+  it('mcp.enabled: false is honored', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      mcp: { enabled: false },
+    });
+    expect(parsed.mcp.enabled).toBe(false);
+  });
+
+  it('rejects mcp.port out of range', () => {
+    expect(() =>
+      orckitConfigSchema.parse({
+        processes: { a: { command: 'echo' } },
+        mcp: { port: 0 },
+      }),
+    ).toThrow();
+    expect(() =>
+      orckitConfigSchema.parse({
+        processes: { a: { command: 'echo' } },
+        mcp: { port: 70_000 },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects non-integer mcp.port', () => {
+    expect(() =>
+      orckitConfigSchema.parse({
+        processes: { a: { command: 'echo' } },
+        mcp: { port: 7676.5 },
+      }),
+    ).toThrow();
+  });
+
   it('accepts a complete configuration', () => {
     const parsed = orckitConfigSchema.parse({
       project: 'demo',

@@ -1,0 +1,50 @@
+project: mcp-demo
+
+# This example demonstrates the built-in MCP server. `orc start` will print:
+#
+#   mcp:  http://127.0.0.1:7676/mcp
+#         claude mcp add --transport http orckit http://127.0.0.1:7676/mcp
+#
+# Run that `claude mcp add` command in a Claude Code session once. Then ask
+# Claude something like "what's running?" or "are there any failed processes?"
+# — it will call the `get_status` / `get_errors` / `get_logs` tools instead of
+# spawning its own `orc`.
+
+mcp:
+  enabled: true        # default — flip to false to opt out
+  port: 7676           # default — override here or with `--mcp-port`
+  host: 127.0.0.1      # default — change only if you understand the
+                       # access-control implications
+
+processes:
+  # A long-running process so MCP clients have something to query.
+  api:
+    command: |
+      echo "api listening"
+      trap 'echo "shutting down"; exit 0' TERM
+      i=0
+      while true; do
+        i=$((i + 1))
+        echo "request $i served"
+        sleep 2
+      done
+    ready:
+      type: log-pattern
+      pattern: 'api listening'
+      timeout_ms: 5000
+
+  # A one-shot that always fails — call `get_errors` from Claude after boot
+  # to see the structured failure with stderr context.
+  flaky:
+    command: |
+      echo "trying to connect to upstream..." 1>&2
+      echo "ECONNREFUSED: upstream not reachable" 1>&2
+      exit 1
+    depends_on: [api]
+    ready:
+      type: exit-code
+      timeout_ms: 5000
+    restart: never
+    # Keep the orchestrator alive after this fails so you can query its
+    # error state via MCP.
+    manual_retry: true

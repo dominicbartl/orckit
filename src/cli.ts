@@ -6,6 +6,7 @@ import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
+import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
 import { buildGraph, visualize } from './graph/resolver.js';
 
 const program = new Command()
@@ -61,10 +62,19 @@ program
   .option('--show-output', 'stream process stdout/stderr to terminal', false)
   .option('--show-build', 'show build events (webpack/angular)', false)
   .option('--no-repl', 'disable the interactive command prompt')
+  .option('--mcp-port <port>', 'override the YAML mcp.port (must be enabled in config)')
+  .option('--no-mcp', 'force-disable the built-in MCP server, overriding YAML')
   .action(
     async (
       processes: string[],
-      opts: { config: string; showOutput: boolean; showBuild: boolean; repl: boolean },
+      opts: {
+        config: string;
+        showOutput: boolean;
+        showBuild: boolean;
+        repl: boolean;
+        mcp: boolean;
+        mcpPort?: string;
+      },
     ) => {
       const config = loadConfig(opts.config);
       const orckit = new Orckit(config);
@@ -82,6 +92,36 @@ program
         console.log(chalk.dim(`  writing logs to ${logReporter.dir}`));
       }
 
+      const cliMcpEnabled = opts.mcp !== false;
+      const cliMcpPort = opts.mcpPort != null ? Number(opts.mcpPort) : undefined;
+      if (cliMcpPort != null && Number.isNaN(cliMcpPort)) {
+        fail(new Error(`--mcp-port must be a number, got "${opts.mcpPort}"`));
+      }
+      let mcpServer: McpServerHandle | null = null;
+      if (cliMcpPort != null && !config.mcp.enabled) {
+        console.warn(
+          chalk.yellow(
+            '  --mcp-port was given but mcp.enabled is false in config; not starting MCP server',
+          ),
+        );
+      } else if (cliMcpEnabled && config.mcp.enabled) {
+        try {
+          mcpServer = await attachMcpServer(orckit, {
+            port: cliMcpPort ?? config.mcp.port,
+            host: config.mcp.host,
+          });
+          console.log(chalk.dim(`  mcp:  ${mcpServer.url}`));
+          console.log(chalk.dim(`        claude mcp add --transport http orckit ${mcpServer.url}`));
+        } catch (err) {
+          console.error(chalk.yellow(`  mcp server failed to start: ${(err as Error).message}`));
+          console.error(
+            chalk.dim(
+              '  (continuing without MCP; set mcp.enabled: false in config or pass --no-mcp to silence)',
+            ),
+          );
+        }
+      }
+
       let shuttingDown = false;
       const shutdown = async (signal: string, code = 0) => {
         if (shuttingDown) return;
@@ -90,6 +130,7 @@ program
         repl?.detach();
         await orckit.dispose();
         await logReporter?.dispose();
+        await mcpServer?.dispose();
         console.log(renderStatus(orckit.states()));
         process.exit(code);
       };

@@ -43,6 +43,12 @@ src/
     cli-reporter.ts   # Subscribes to Orckit events, writes to console
     debug.ts          # Minimal namespaced logger (ORCKIT_DEBUG=ns1,ns2)
 
+  mcp/
+    server.ts         # attachMcpServer — Streamable HTTP MCP listener that
+                      # exposes the running Orckit instance to MCP clients
+    tools.ts          # Pure handlers for the three read-only tools
+                      # (get_status / get_errors / get_logs)
+
   util/
     env.ts            # mergeEnv (process.env + extras)
     port.ts           # isPortFree
@@ -97,6 +103,17 @@ Mark a process `manual_retry: true` to let its boot failure be recoverable: `sta
 
 The interactive REPL in `src/cli.ts` (`reporter/repl.ts`) is the user-facing surface: typing `r backend` calls `restart(['backend'], { cascade: true })`. It attaches to stdin only when stdin is a TTY and `--no-repl` was not passed.
 
+## MCP server: how Claude Code queries a running orckit
+
+`src/mcp/` is a reporter-style consumer of Orckit: `attachMcpServer(orckit, opts)` follows the same shape as `attachLogReporter` — it subscribes to events (for last-error tracking), exposes a few synchronous queries from the Orckit instance, and returns a handle with `dispose()`. It runs **inside the `orc start` process** over Streamable HTTP on `127.0.0.1:7676` (configurable via the `mcp:` YAML block or `--mcp-port` / `--no-mcp`). There is no separate `orc mcp` subcommand and no IPC layer.
+
+Three layers:
+1. **`mcp/tools.ts`** — pure handlers that take an `OrckitView` (a structural subset of `Orckit`) and produce text + JSON. Trivial to unit-test against a stub.
+2. **`mcp/server.ts`** — the HTTP server. In stateless Streamable HTTP mode the SDK requires a fresh `StreamableHTTPServerTransport` + `McpServer` per request (see the SDK's `simpleStatelessStreamableHttp` example); `attachMcpServer` does this in its request handler.
+3. **`cli.ts start`** — resolves effective settings (CLI flag > YAML > schema default), calls `attachMcpServer`, prints the URL and a `claude mcp add` hint.
+
+Anything that needs a richer view than `inspect(name)` / `states()` / `output(name, n)` should grow Orckit's public surface additively, not reach into private state.
+
 ## Adding a new feature
 
 - **New ready-check type**: add the Zod variant in `config/schema.ts`, add a class to `health/checks.ts`, add a case in `createProbe`. No other file should change.
@@ -117,6 +134,7 @@ What counts as "public surface":
 | Any event emitted by `Orckit` (`src/orchestrator/orchestrator.ts`) | README.md events table |
 | Any CLI command or flag (`src/cli.ts`) | README.md quick start, AGENTS.md workflow section |
 | REPL commands (`src/reporter/repl.ts`) | README.md REPL section |
+| MCP tool definitions or descriptions (`src/mcp/tools.ts`) | README.md MCP server section, AGENTS.md "Querying a running orckit" |
 | Default values, error behavior, or anything that changes how a *working* config behaves | README.md, AGENTS.md anti-patterns / validation checklist if relevant |
 
 Quick rules:

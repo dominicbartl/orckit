@@ -222,6 +222,16 @@ const next = transition('starting', { kind: 'ready' });  // -> 'ready'
 
 Full event list and CLI flag reference: [README.md](README.md).
 
+## Querying a running orckit
+
+If the user is already running `orc start` in another terminal, prefer querying its MCP server over spawning a new `orc`. `orc start` exposes three read-only tools by default (`get_status`, `get_errors`, `get_logs`) on `http://127.0.0.1:7676/mcp`. The user only needs to register it once with `claude mcp add --transport http orckit http://127.0.0.1:7676/mcp`.
+
+- "Is the build running?" / "what's failing?" → call `get_status` (and `get_errors` if anything is in a failed state).
+- "Show me the recent api output" → call `get_logs` with `{ name: 'api', lines: 100 }`.
+- If the tools aren't connectable, the user hasn't started orckit — tell them to run `orc start` rather than silently spawning your own.
+
+The port can be changed via `mcp.port` in YAML or `--mcp-port`; disable entirely with `mcp.enabled: false` or `--no-mcp`.
+
 ## Where to look
 
 - **Schema (authoritative for every field, every default):** [src/config/schema.ts](src/config/schema.ts)

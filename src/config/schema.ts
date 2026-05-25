@@ -122,6 +122,18 @@ const logsConfigSchema = z.object({
   dir: z.string().default('.orckit/logs'),
 });
 
+const mcpConfigSchema = z.object({
+  /**
+   * When true, `orc start` additionally listens on `host:port` as a
+   * Model Context Protocol server over Streamable HTTP. Claude Code (and any
+   * MCP client) can connect to query process status, errors, and recent
+   * output without spawning its own `orc`.
+   */
+  enabled: z.boolean().default(true),
+  port: z.number().int().min(1).max(65_535).default(7676),
+  host: z.string().default('127.0.0.1'),
+});
+
 export const orckitConfigSchema = z.object({
   project: z.string().default('orckit'),
   processes: z.record(z.string(), processConfigSchema).refine((p) => Object.keys(p).length > 0, {
@@ -129,6 +141,7 @@ export const orckitConfigSchema = z.object({
   }),
   preflight: z.array(preflightCheckSchema).default([]),
   logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
+  mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
 });
 
 export type OrckitConfig = z.infer<typeof orckitConfigSchema>;
@@ -145,3 +158,4 @@ export type RestartPolicy = z.infer<typeof restartPolicySchema>;
 export type ProcessType = z.infer<typeof processTypeSchema>;
 export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
+export type McpConfig = z.infer<typeof mcpConfigSchema>;

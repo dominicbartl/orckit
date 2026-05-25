@@ -27,6 +27,7 @@ export type {
   RestartPolicy,
   PreflightCheck,
   LogsConfig,
+  McpConfig,
 } from './config/schema.js';
 
 export {
@@ -71,3 +72,5 @@ export {
   type LogReporterOptions,
   type LogReporterHandle,
 } from './reporter/log-reporter.js';
+
+export { attachMcpServer, type McpServerOptions, type McpServerHandle } from './mcp/server.js';
