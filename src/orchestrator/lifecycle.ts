@@ -30,12 +30,7 @@ export class IllegalTransitionError extends Error {
 export function transition(state: ProcessState, event: LifecycleEvent): ProcessState {
   switch (event.kind) {
     case 'start':
-      if (
-        state === 'pending' ||
-        state === 'stopped' ||
-        state === 'failed' ||
-        state === 'finished'
-      )
+      if (state === 'pending' || state === 'stopped' || state === 'failed' || state === 'finished')
         return 'starting';
       break;
     case 'ready':

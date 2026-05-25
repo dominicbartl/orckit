@@ -26,6 +26,19 @@ describe('processConfigSchema', () => {
     expect(parsed.manual_retry).toBe(true);
   });
 
+  it('stop_command is optional and defaults to undefined', () => {
+    const parsed = processConfigSchema.parse({ command: 'echo hi' });
+    expect(parsed.stop_command).toBeUndefined();
+  });
+
+  it('accepts stop_command', () => {
+    const parsed = processConfigSchema.parse({
+      command: 'docker run --name foo postgres:15',
+      stop_command: 'docker stop foo',
+    });
+    expect(parsed.stop_command).toBe('docker stop foo');
+  });
+
   it('requires a command', () => {
     expect(() => processConfigSchema.parse({})).toThrow();
   });

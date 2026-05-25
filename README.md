@@ -120,9 +120,10 @@ processes:
       type: custom
       command: 'curl -fsS localhost:3000/ready'
 
-    restart: on-failure | always | never  # default: on-failure
+    restart: on-failure | always | never  # default: never (no auto-retry).
+                                          # Set to `on-failure` to retry crashes up to `max_retries`.
     restart_delay_ms: 2000
-    max_retries: 3
+    max_retries: 3                        # only relevant when restart != never
 
     manual_retry: true     # default: false
     # When false: a boot-time failure aborts `orc start` with exit 1.
