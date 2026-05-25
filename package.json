@@ -36,6 +36,7 @@
     "examples",
     "!examples/**/node_modules",
     "!examples/**/node_modules/**",
+    "assets",
     "AGENTS.md",
     "README.md",
     "LICENSE"

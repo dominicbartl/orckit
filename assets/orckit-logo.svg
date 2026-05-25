@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="80" viewBox="0 0 260 80" fill="none" role="img" aria-label="orckit">
+  <g transform="translate(8, 16)">
+    <rect x="0"  y="0"  width="40" height="6" rx="2" fill="#4fb8c8" opacity="0.95"/>
+    <rect x="0"  y="12" width="30" height="6" rx="2" fill="#4fb8c8" opacity="0.75"/>
+    <rect x="0"  y="24" width="20" height="6" rx="2" fill="#4fb8c8" opacity="0.55"/>
+    <rect x="0"  y="36" width="10" height="6" rx="2" fill="#4fb8c8" opacity="0.35"/>
+  </g>
+  <text
+    x="68"
+    y="52"
+    font-family="ui-monospace, SFMono-Regular, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"
+    font-size="36"
+    font-weight="500"
+    fill="#4fb8c8"
+    letter-spacing="-1"
+  >orckit</text>
+</svg>

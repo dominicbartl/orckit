@@ -1,8 +1,44 @@
-# Orckit
+<p align="center">
+  <img src="https://raw.githubusercontent.com/dominicbartl/orckit/main/assets/orckit-logo.svg" alt="orckit" width="260" />
+</p>
 
-A lean CLI for orchestrating multiple processes in local development. Think a single-binary, opinionated replacement for a handful of shell scripts plus `tmux` plus `wait-on`.
+<p align="center">
+  <strong>A lean CLI for orchestrating multiple processes in local development.</strong><br/>
+  <sub>One YAML file. Dependency-ordered boot. Live dashboard. Browser UI. Built-in MCP server.</sub>
+</p>
 
-It takes a YAML file describing your processes, their dependencies, and how to know they're ready — then starts them in the right order, watches for failures, restarts on policy, and tears everything down cleanly on Ctrl-C.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#live-dashboard">Live dashboard</a> ·
+  <a href="#configuration-reference">Config reference</a> ·
+  <a href="#mcp-server">MCP</a> ·
+  <a href="#programmatic-api">API</a>
+</p>
+
+---
+
+Think a single-binary, opinionated replacement for a handful of shell scripts plus `tmux` plus `wait-on`. Point it at a YAML file describing your processes, their dependencies, and how to know they're ready — orckit starts them in the right order, watches for failures, restarts on policy, and tears everything down cleanly on Ctrl-C.
+
+```
+  █████████   orckit
+  ███████     my-app
+  █████       web   http://127.0.0.1:7677
+  ██          mcp   http://127.0.0.1:7676/mcp
+              logs  .orckit/logs
+
+  ┌─ Wave 1 ─── starts immediately
+  │  ✓ db                       (245ms)
+  │
+  ├─ Wave 2 ─── after wave 1
+  │  ✓ api    ← db              (1.2s)
+  │  ⠋ web    ← api             building 67%
+  │
+  └─ Wave 3 ─── after wave 2
+     ○ worker ← api
+
+  2/4 ready  ·  1 building  ·  1 pending
+```
 
 ## Install
 
@@ -56,7 +92,7 @@ npx orc start --no-mcp          # force-disable the built-in MCP server
 
 Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
 
-### Live dashboard
+## Live dashboard
 
 When stdout is a TTY, `orc start` pins a persistent dashboard to the bottom of the terminal for the whole session. It has three regions:
 
