@@ -11,7 +11,7 @@ describe('processConfigSchema', () => {
     expect(parsed).toMatchObject({
       type: 'bash',
       category: 'default',
-      restart: 'on-failure',
+      restart: 'never',
       restart_delay_ms: 2000,
       max_retries: 3,
       env: {},

@@ -62,7 +62,11 @@ const hookConfigSchema = z.object({
   post_stop: z.string().optional(),
 });
 
-const restartPolicySchema = z.enum(['always', 'on-failure', 'never']).default('on-failure');
+// Default `never`: a process that crashes stays crashed. Opting into auto-retry
+// is a deliberate choice (set `restart: on-failure` or `always`) — silent retry
+// loops on a fundamentally broken process produce noise and obscure the real
+// error.
+const restartPolicySchema = z.enum(['always', 'on-failure', 'never']).default('never');
 
 const processTypeSchema = z.enum(['bash', 'webpack', 'angular']).default('bash');
 

@@ -75,13 +75,13 @@ Do not pick `webpack`/`angular` just because the project uses webpack/angular so
 
 | Policy | When |
 |---|---|
-| `on-failure` (default) | Almost everything. Restart on crash, leave alone on clean exit. |
+| `never` (default) | The default. A crashed process stays crashed. Use this for almost everything in local dev — when something dies, the user wants to see the error, not a retry loop that obscures it. |
+| `on-failure` | Opt in when the process is genuinely transient-flaky (e.g. waits for a slow network mount) and a re-spawn is the right reflex. Restarts on crash, leaves alone on clean exit. |
 | `always` | Background daemons you want kept alive regardless. Rare in dev. |
-| `never` | One-shots (migrations, codegen). |
 
-`max_retries: 3` is the default; `restart_delay_ms: 2000`. After `max_retries`, the process goes `failed`. What happens next is governed by `manual_retry` — see below.
+`max_retries: 3` is the default (only meaningful when `restart` is not `never`); `restart_delay_ms: 2000`. After `max_retries`, the process goes `failed`. What happens next is governed by `manual_retry` — see below.
 
-Do **not** set `restart: always` on a command that exits 0 quickly — you get a tight respawn loop.
+Do **not** set `restart: always` on a command that exits 0 quickly — you get a tight respawn loop. Do **not** set `restart: on-failure` on a process whose failure mode is "config is wrong" (port taken, missing env var, syntax error) — retries will all fail the same way and just create noise. Prefer the default `never` and let the user fix it and rerun.
 
 ## `manual_retry`
 
