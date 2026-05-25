@@ -28,6 +28,7 @@ export type {
   PreflightCheck,
   LogsConfig,
   McpConfig,
+  WebConfig,
 } from './config/schema.js';
 
 export {
@@ -80,3 +81,4 @@ export {
 } from './reporter/live-view.js';
 
 export { attachMcpServer, type McpServerOptions, type McpServerHandle } from './mcp/server.js';
+export { attachWebUi, type WebUiServerOptions, type WebUiServerHandle } from './web/server.js';

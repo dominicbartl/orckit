@@ -42,7 +42,9 @@
   ],
   "scripts": {
     "dev": "tsx watch src/cli.ts",
-    "build": "rm -rf dist && tsc",
+    "dev:web": "pnpm --filter @orckit/web-ui dev",
+    "build": "rm -rf dist && tsc && pnpm build:web",
+    "build:web": "pnpm --filter @orckit/web-ui build && mkdir -p dist/web/static && cp -R packages/web-ui/dist/. dist/web/static/",
     "postbuild": "chmod +x dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",

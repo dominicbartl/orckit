@@ -6,6 +6,7 @@ import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, renderStatus } from './reporter/cli-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
+import { attachWebUi, type WebUiServerHandle } from './web/server.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
 import { attachLiveBootView, type LiveBootViewHandle } from './reporter/live-view.js';
@@ -67,6 +68,8 @@ program
   .option('--no-live', 'disable the animated boot view (use plain line-by-line output)')
   .option('--mcp-port <port>', 'override the YAML mcp.port (must be enabled in config)')
   .option('--no-mcp', 'force-disable the built-in MCP server, overriding YAML')
+  .option('--web-port <port>', 'override the YAML web.port (must be enabled in config)')
+  .option('--no-web', 'force-disable the built-in web dashboard, overriding YAML')
   .action(
     async (
       processes: string[],
@@ -78,6 +81,8 @@ program
         live: boolean;
         mcp: boolean;
         mcpPort?: string;
+        web: boolean;
+        webPort?: string;
       },
     ) => {
       const config = loadConfig(opts.config);
@@ -115,6 +120,35 @@ program
           console.error(
             chalk.dim(
               '  (continuing without MCP; set mcp.enabled: false in config or pass --no-mcp to silence)',
+            ),
+          );
+        }
+      }
+
+      const cliWebEnabled = opts.web !== false;
+      const cliWebPort = opts.webPort != null ? Number(opts.webPort) : undefined;
+      if (cliWebPort != null && Number.isNaN(cliWebPort)) {
+        fail(new Error(`--web-port must be a number, got "${opts.webPort}"`));
+      }
+      let webServer: WebUiServerHandle | null = null;
+      if (cliWebPort != null && !config.web.enabled) {
+        console.warn(
+          chalk.yellow(
+            '  --web-port was given but web.enabled is false in config; not starting web dashboard',
+          ),
+        );
+      } else if (cliWebEnabled && config.web.enabled) {
+        try {
+          webServer = await attachWebUi(orckit, {
+            port: cliWebPort ?? config.web.port,
+            host: config.web.host,
+          });
+          console.log(chalk.dim(`  web:  ${webServer.url}`));
+        } catch (err) {
+          console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
+          console.error(
+            chalk.dim(
+              '  (continuing without dashboard; set web.enabled: false in config or pass --no-web to silence)',
             ),
           );
         }
@@ -159,6 +193,7 @@ program
         await orckit.dispose();
         await logReporter?.dispose();
         await mcpServer?.dispose();
+        await webServer?.dispose();
         console.log(renderStatus(orckit.states()));
         process.exit(code);
       };

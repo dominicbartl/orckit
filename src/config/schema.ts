@@ -168,6 +168,17 @@ const mcpConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
 });
 
+const webConfigSchema = z.object({
+  /**
+   * When true, `orc start` additionally serves an in-process browser
+   * dashboard on `host:port`. Pure reporter on top of the public event
+   * API; does not affect orchestration. Disable to skip binding the port.
+   */
+  enabled: z.boolean().default(true),
+  port: z.number().int().min(1).max(65_535).default(7677),
+  host: z.string().default('127.0.0.1'),
+});
+
 export const orckitConfigSchema = z.object({
   project: z.string().default('orckit'),
   processes: z.record(z.string(), processConfigSchema).refine((p) => Object.keys(p).length > 0, {
@@ -176,6 +187,7 @@ export const orckitConfigSchema = z.object({
   preflight: z.array(preflightCheckSchema).default([]),
   logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
   mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
+  web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
 });
 
 export type OrckitConfig = z.infer<typeof orckitConfigSchema>;
@@ -193,3 +205,4 @@ export type ProcessType = z.infer<typeof processTypeSchema>;
 export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
+export type WebConfig = z.infer<typeof webConfigSchema>;

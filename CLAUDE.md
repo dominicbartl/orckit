@@ -49,9 +49,21 @@ src/
     tools.ts          # Pure handlers for the three read-only tools
                       # (get_status / get_errors / get_logs)
 
+  web/
+    server.ts         # attachWebUi — HTTP listener for the browser dashboard
+                      # (serves bundled SPA + SSE event stream + action API)
+    events.ts         # streamOrckitEvents — pushes Orckit events over SSE
+    snapshot.ts       # buildSnapshot — serializable view of Orckit state
+    static.ts         # serveStaticAsset + resolveStaticDir for the SPA shell
+
   util/
     env.ts            # mergeEnv (process.env + extras)
     port.ts           # isPortFree
+
+packages/
+  web-ui/             # @orckit/web-ui workspace — SolidJS + Vite + Tailwind v4
+                      # frontend. NOT published. `pnpm build:web` builds it and
+                      # copies dist/ into `dist/web/static/` for the npm tarball.
 
 tests/
   config/  graph/  health/  process/  orchestrator/  util/    # unit tests
@@ -114,6 +126,19 @@ Three layers:
 
 Anything that needs a richer view than `inspect(name)` / `states()` / `output(name, n)` should grow Orckit's public surface additively, not reach into private state.
 
+## Web dashboard: how a browser drives a running orckit
+
+`src/web/` is another reporter-style consumer of Orckit. `attachWebUi(orckit, opts)` returns a `{ url, port, dispose() }` handle just like `attachMcpServer`, runs in-process over HTTP on `127.0.0.1:7677` (configurable via `web:` YAML block or `--web-port` / `--no-web`), and serves three things from the same listener:
+
+- **the SPA shell** (`packages/web-ui/dist/*`) — built artifacts copied into `dist/web/static/` at package-build time
+- **`GET /api/state` + `GET /api/output/:name`** — initial-hydration snapshots over JSON
+- **`GET /events`** — SSE stream of orckit events, beginning with a full snapshot for reconnect tolerance
+- **`POST /api/restart/:name` + `POST /api/stop/:name`** — action endpoints calling `orckit.restart()` / `orckit.stop()` directly
+
+The frontend lives in **`packages/web-ui/`** (a pnpm workspace, `@orckit/web-ui`, private, not published). It's SolidJS + Vite + Tailwind v4. Build it with `pnpm build:web` from the root; the static assets get copied into the cli package's tarball so end users get one `npm i @orckit/cli` without needing to run two build systems.
+
+The `/sink` route is the design system kitchen sink — every component in every state with static fixtures. Keep it in sync when adding or modifying components in `packages/web-ui/src/components/`.
+
 ## Adding a new feature
 
 - **New ready-check type**: add the Zod variant in `config/schema.ts`, add a class to `health/checks.ts`, add a case in `createProbe`. No other file should change.
@@ -158,7 +183,10 @@ pnpm typecheck
 pnpm test                         # all tests (~3s on a quiet machine)
 pnpm test:unit                    # everything except tests/integration
 pnpm test:integration             # spawns real bash processes
-pnpm build                        # tsc → dist/
+pnpm build                        # tsc → dist/, then build:web copies SPA assets
+pnpm build:web                    # build just the @orckit/web-ui frontend
+pnpm dev:web                      # vite dev server for the frontend
+                                  # (proxies /api + /events to 127.0.0.1:7677)
 ORCKIT_LOG_LEVEL=debug pnpm dev   # verbose internal logs
 ORCKIT_DEBUG=Orckit,Runner pnpm dev   # per-namespace debug
 ```
