@@ -112,4 +112,75 @@ describe('Runner', () => {
     runner.start();
     expect(() => runner.start()).toThrow(/already started/);
   });
+
+  it('uses stop_command instead of SIGTERM when configured', async () => {
+    // The child traps TERM so SIGTERM alone won't end it. The stop_command
+    // writes a sentinel file the child polls — proving the stop_command path
+    // actually fires (otherwise the grace timeout would SIGKILL and we'd
+    // never see the sentinel).
+    const dir = mkdtempSync(join(tmpdir(), 'orckit-stopcmd-'));
+    cleanups.push(async () => rmSync(dir, { recursive: true, force: true }));
+    const sentinel = join(dir, 'stop.flag');
+    const runner = track(
+      new Runner(
+        't',
+        baseConfig({
+          command: `trap '' TERM; while [ ! -f "${sentinel}" ]; do sleep 0.05; done; echo "stopped-cleanly"; exit 0`,
+          stop_command: `touch "${sentinel}"`,
+        }),
+      ),
+    );
+    const lines: string[] = [];
+    runner.on('line', (text) => lines.push(text));
+    runner.start();
+    await new Promise((r) => setTimeout(r, 150));
+    const start = Date.now();
+    await runner.stop(3000);
+    expect(Date.now() - start).toBeLessThan(2000); // exited well before grace timeout
+    expect(runner.running).toBe(false);
+    expect(lines).toContain('stopped-cleanly');
+  });
+
+  it('falls back to SIGKILL when stop_command does not end the process', async () => {
+    const runner = track(
+      new Runner(
+        't',
+        baseConfig({
+          command: "trap '' TERM; sleep 30",
+          stop_command: 'true', // no-op
+        }),
+      ),
+    );
+    runner.start();
+    await new Promise((r) => setTimeout(r, 150));
+    const start = Date.now();
+    await runner.stop(300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(runner.running).toBe(false);
+  });
+
+  it('surfaces stop_command stderr through the runner line stream', async () => {
+    const runner = track(
+      new Runner(
+        't',
+        baseConfig({
+          // The main process exits on its own once it sees the flag — keeps
+          // the test fast without depending on grace-timeout escalation.
+          command: 'sleep 30 &\npid=$!\ntrap "kill $pid 2>/dev/null" EXIT\nwait $pid',
+          stop_command: 'echo "stop diag" >&2; sleep 0.05',
+        }),
+      ),
+    );
+    const stderrLines: string[] = [];
+    runner.on('line', (text, stream) => {
+      if (stream === 'stderr') stderrLines.push(text);
+    });
+    runner.start();
+    await new Promise((r) => setTimeout(r, 150));
+    // The stop_command is a no-op against the main process; the SIGKILL
+    // fallback at the end of grace will end it. We just want to assert that
+    // the stop_command's stderr was forwarded.
+    await runner.stop(300);
+    expect(stderrLines).toContain('stop diag');
+  });
 });

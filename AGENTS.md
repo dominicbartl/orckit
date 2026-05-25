@@ -126,6 +126,24 @@ All four are shell strings, run synchronously, block the lifecycle phase they're
 
 For "install on first run," prefer commands that no-op when up-to-date (`pnpm install --silent`).
 
+## `stop_command` — clean shutdown for CLI clients
+
+A process whose visible command is just a *client* of something else (the canonical case is `docker run`, where the container is owned by `dockerd` and survives the local CLI being killed) needs an explicit stop verb. Set `stop_command` to that verb — orckit runs it during shutdown instead of SIGTERM:
+
+```yaml
+processes:
+  db:
+    command: docker run --rm --name=app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
+    stop_command: docker stop app-db
+    ready: { type: tcp, port: 5432 }
+```
+
+The flow on Ctrl-C: orckit runs `docker stop app-db` → dockerd sends SIGTERM to the container → container exits → `docker run` exits → `--rm` cleans up the container. If the main process is still alive after the grace window (10s), orckit SIGKILLs as a last resort.
+
+Use it whenever you see `docker run`, `docker compose up`, `kubectl port-forward`, `ngrok http`, or any other foreground CLI that proxies a daemon-managed resource. Pair `docker run` with `--name=<n>` so the stop command has a stable handle. For `docker compose up`, the natural pairing is `stop_command: docker compose down`.
+
+Don't set it on plain processes (node, python, etc.) — SIGTERM is correct there and `stop_command` would just be extra config to keep in sync.
+
 ## `output` filters
 
 ```yaml

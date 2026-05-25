@@ -95,7 +95,15 @@ export class Runner extends EventEmitter<RunnerEvents> {
       return;
     }
     const finished = this.awaitExit();
-    killTree(pid, 'SIGTERM');
+    if (this.config.stop_command) {
+      // Custom stop verb (e.g. `docker stop <name>`) — fire and forget; we only
+      // care that it triggers a graceful exit of the main process. Any stderr
+      // is surfaced through the runner's normal line stream so the user sees
+      // it in the failure-tail dump on errors.
+      this.runStopCommand(this.config.stop_command);
+    } else {
+      killTree(pid, 'SIGTERM');
+    }
     const winner = await Promise.race([
       finished.then(() => 'exit' as const),
       delay(graceMs).then(() => 'timeout' as const),
@@ -105,6 +113,23 @@ export class Runner extends EventEmitter<RunnerEvents> {
       await finished;
     }
     this.process = null;
+  }
+
+  private runStopCommand(command: string): void {
+    const sub = execa('bash', ['-c', command], {
+      cwd: this.config.cwd ?? process.cwd(),
+      env: mergeEnv(this.config.env),
+      reject: false,
+      buffer: false,
+      stdin: 'ignore',
+    });
+    sub.stdout?.setEncoding('utf-8');
+    sub.stderr?.setEncoding('utf-8');
+    bindLineStream(sub.stdout, (line) => this.emit('line', line, 'stdout'));
+    bindLineStream(sub.stderr, (line) => this.emit('line', line, 'stderr'));
+    // Swallow errors — if the stop command itself fails, the grace timeout
+    // will fall through to SIGKILL anyway.
+    sub.catch(() => {});
   }
 
   private awaitExit(): Promise<void> {

@@ -74,6 +74,16 @@ export const processConfigSchema = z.object({
   category: z.string().default('default'),
   type: processTypeSchema,
   command: z.string().min(1),
+  /**
+   * Shell command run during shutdown *instead of* SIGTERM. Use it for CLI
+   * clients that manage external resources their own process doesn't directly
+   * own — e.g. `docker run`, where killing the local CLI doesn't necessarily
+   * stop the container. orckit fires the command, then waits the normal grace
+   * period for the main process to exit; if it's still alive at the end of
+   * the grace window it gets SIGKILLed as a last resort. Falls back to plain
+   * SIGTERM when unset.
+   */
+  stop_command: z.string().optional(),
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).default({}),
   depends_on: z.array(z.string()).default([]),

@@ -23,7 +23,8 @@ project: my-app
 
 processes:
   db:
-    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
+    command: docker run --rm --name=my-app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
+    stop_command: docker stop my-app-db    # ensures the container is stopped on shutdown
     ready:
       type: tcp
       port: 5432
@@ -69,6 +70,11 @@ processes:
   <name>:
     type: bash | webpack | angular   # default: bash
     command: <shell command>          # required
+    stop_command: <shell command>     # optional; run *instead of* SIGTERM during shutdown.
+                                      # Use for CLI clients managing external state — e.g.
+                                      # `docker stop <name>` for a `docker run --name <name> ...`
+                                      # process. Falls back to SIGKILL if the main process is
+                                      # still alive after the grace period.
     cwd: <path>                       # default: current dir
     category: <string>                # cosmetic grouping; default: 'default'
     env: { KEY: value }
