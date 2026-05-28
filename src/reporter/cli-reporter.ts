@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type { BootSummary, Orckit } from '../orchestrator/orchestrator.js';
 import { formatDuration } from '../config/duration.js';
 import type { ProcessState } from '../orchestrator/lifecycle.js';
+import type { HookKind } from '../orchestrator/hooks.js';
 
 const STATE_COLOR: Record<ProcessState, (s: string) => string> = {
   pending: chalk.gray,
@@ -100,6 +101,19 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     if (quiet) return;
     out(`  ${chalk.yellow('↻')} ${name} restarting (attempt ${attempt})`);
   };
+  // Hooks are announced in BOTH plain and dashboard modes: the dashboard's live
+  // region doesn't render hook activity, so these lines (routed through its
+  // printAbove sink) are the only signal that a lifecycle hook fired. They also
+  // surface a failing `pre_start` hook, which otherwise aborts a spawn before any
+  // `process:failed` is emitted.
+  const onHookStart = (name: string, hook: HookKind) => {
+    out(chalk.dim(`  ↪ ${name} ${hook} hook`));
+  };
+  const onHookFailed = (name: string, hook: HookKind, err?: Error) => {
+    out(
+      `  ${chalk.red('↪')} ${name} ${hook} hook failed${err ? `: ${chalk.red(err.message)}` : ''}`,
+    );
+  };
   const onPreflightStart = () => out(chalk.cyan.bold('\n  Preflight'));
   const onPreflightResult = (r: {
     name: string;
@@ -162,6 +176,8 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   orckit.on('process:stopped', onStopped);
   orckit.on('process:failed', onFailed);
   orckit.on('process:restarting', onRestarting);
+  orckit.on('hook:start', onHookStart);
+  orckit.on('hook:failed', onHookFailed);
   orckit.on('all:ready', onAllReady);
   orckit.on('boot:complete', onBootComplete);
   if (onLine) orckit.on('process:line', onLine);
@@ -176,6 +192,8 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     orckit.off('process:stopped', onStopped);
     orckit.off('process:failed', onFailed);
     orckit.off('process:restarting', onRestarting);
+    orckit.off('hook:start', onHookStart);
+    orckit.off('hook:failed', onHookFailed);
     orckit.off('all:ready', onAllReady);
     orckit.off('boot:complete', onBootComplete);
     if (onLine) orckit.off('process:line', onLine);

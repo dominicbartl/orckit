@@ -102,6 +102,23 @@ describe('attachCliReporter — failure tail', () => {
   });
 });
 
+describe('attachCliReporter — hook activity', () => {
+  it('announces hook:start and hook:failed (in plain and dashboard modes)', () => {
+    const captured: string[] = [];
+    const orckit = makeFakeOrckit();
+    // quietProcessEvents mirrors how the dashboard attaches the reporter; hook
+    // lines must still appear because the dashboard does not render them itself.
+    attachCliReporter(orckit, { out: (m) => captured.push(m), quietProcessEvents: true });
+
+    orckit.emit('hook:start', 'service', 'pre_start');
+    orckit.emit('hook:failed', 'service', 'pre_start', new Error('npm install failed'));
+
+    expect(captured[0]).toContain('service pre_start hook');
+    expect(captured[1]).toContain('service pre_start hook failed');
+    expect(captured[1]).toContain('npm install failed');
+  });
+});
+
 describe('printFailureDump', () => {
   it('prints a header + error + tail block per failed process', () => {
     const outputs = new Map<string, OutputLine[]>([

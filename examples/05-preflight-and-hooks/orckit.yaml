@@ -4,6 +4,14 @@ project: preflight-and-hooks
 # fail, the run aborts and Orckit prints the failing check + its `on_fail`
 # hint. After preflight passes, hooks fire around each process's
 # start and stop lifecycle.
+#
+# Orckit announces each hook as it fires with a `↪ <name> <hook> hook` line,
+# so you'll see all four in order: pre_start (before spawn), post_start
+# (after ready), pre_stop (before SIGTERM), post_stop (after exit). The hook
+# command's OWN stdout isn't streamed — the echoes below are illustrative of
+# "a command that runs at this phase" (in real configs these are things like
+# `pnpm install`, a DB migration, or `docker rm -f`). A failing hook is shown
+# in red and (for pre_start) aborts the spawn.
 
 preflight:
   - name: bash-installed

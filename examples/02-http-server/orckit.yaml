@@ -11,7 +11,10 @@ processes:
       PORT: '3001'
       NODE_ENV: development
     hooks:
-      pre_start: pnpm install --silent
+      # --ignore-workspace so pnpm installs into this dir instead of walking up
+      # to orckit's own pnpm-workspace.yaml (which would no-op and leave
+      # node_modules empty, so `node server.js` can't find express).
+      pre_start: pnpm install --ignore-workspace --silent
     ready:
       type: http
       url: http://localhost:3001/health

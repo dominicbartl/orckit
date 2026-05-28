@@ -188,10 +188,10 @@ processes:
     #             an optional one — that would force the optional one to
     #             always start.
 
-    hooks:
-      pre_start: 'npm install'
-      post_start: 'echo ready'
-      pre_stop: 'echo stopping'
+    hooks:                          # orc announces each as `↪ <name> <hook> hook`
+      pre_start: 'npm install'      #   when it fires; a failing hook shows in red
+      post_start: 'echo ready'      #   (a failing pre_start aborts the spawn). The
+      pre_stop: 'echo stopping'     #   hook command's own stdout is not streamed.
       post_stop: 'echo stopped'
 
     output:
