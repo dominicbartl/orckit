@@ -18,7 +18,13 @@ describe('processConfigSchema', () => {
       depends_on: [],
       buffer_size: 1000,
       manual_retry: false,
+      hook_timeout_ms: 60_000,
     });
+  });
+
+  it('accepts a custom hook_timeout_ms for slow install hooks', () => {
+    const parsed = processConfigSchema.parse({ command: 'echo hi', hook_timeout_ms: 600_000 });
+    expect(parsed.hook_timeout_ms).toBe(600_000);
   });
 
   it('accepts manual_retry: true', () => {

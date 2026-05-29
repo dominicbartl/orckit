@@ -264,6 +264,40 @@ describe('Orckit end-to-end', () => {
     expect(seen).toContain('p:post_start');
   });
 
+  it('marks a process failed (not stuck pending) when its pre_start hook fails', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        p: {
+          command: 'echo never-runs',
+          ready: { type: 'exit-code' },
+          hooks: { pre_start: 'exit 1' },
+        },
+      }),
+    );
+    const failed: string[] = [];
+    orckit.on('process:failed', (name) => failed.push(name));
+    // pre_start runs before the process leaves `pending`; a failure must surface
+    // as a strict boot failure rather than silently leaving it pending.
+    await expect(orckit.start()).rejects.toThrow(/boot failed/);
+    expect(orckit.state('p')).toBe('failed');
+    expect(failed).toContain('p');
+  });
+
+  it('honors a custom hook_timeout_ms (slow hook is killed and fails the boot)', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        p: {
+          command: 'echo never-runs',
+          ready: { type: 'exit-code' },
+          hooks: { pre_start: 'sleep 5' },
+          hook_timeout_ms: 200,
+        },
+      }),
+    );
+    await expect(orckit.start()).rejects.toThrow(/boot failed/);
+    expect(orckit.state('p')).toBe('failed');
+  });
+
   it('stops cleanly and reports stopped state', async () => {
     orckit = new Orckit(
       makeConfig({

@@ -1,0 +1,27 @@
+project: angular
+
+# A real, minimal Angular app (generated with `ng new --minimal`) served by the
+# Angular CLI dev server. `type: angular` selects the build-output parser, so
+# orckit turns `ng serve`'s "Building..." / "Application bundle generation
+# complete" lines into build:start / build:complete events and the dashboard
+# annotates the row ("building" → "built"). The http ready check waits for the
+# dev server to actually answer on :4200 before marking the process ready.
+#
+# First run installs the Angular toolchain via the pre_start hook (slow, cold);
+# later runs reuse node_modules and boot in a couple of seconds.
+
+processes:
+  web:
+    type: angular
+    command: pnpm ng serve --port 4200
+    cwd: ./examples/12-angular
+    env:
+      # Skip the Angular CLI's first-run analytics prompt in fresh checkouts.
+      NG_CLI_ANALYTICS: 'false'
+    # A cold install of the Angular toolchain easily blows past the default 60s
+    # hook timeout, so give pre_start a generous 10-minute budget.
+    hook_timeout_ms: 600000
+    ready:
+      type: http
+      url: http://localhost:4200/
+      timeout_ms: 120000

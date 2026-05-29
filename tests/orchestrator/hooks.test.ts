@@ -29,4 +29,17 @@ describe('runHook', () => {
   it('passes env vars through', async () => {
     await runHook('pre_start', { pre_start: '[ "$MY_VAR" = "yes" ]' }, { env: { MY_VAR: 'yes' } });
   });
+
+  it('kills a hook that exceeds timeoutMs and reports a null exit code', async () => {
+    try {
+      await runHook('pre_start', { pre_start: 'sleep 5' }, { timeoutMs: 200 });
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HookError);
+      // A timed-out hook is killed by signal, so there's no exit code — this is
+      // exactly the "(exit ?)" the user sees on a too-slow `pre_start` install.
+      expect((err as HookError).exitCode).toBeNull();
+      expect((err as HookError).message).toContain('exit ?');
+    }
+  });
 });

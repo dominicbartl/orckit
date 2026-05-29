@@ -129,6 +129,8 @@ All four are shell strings, run synchronously, block the lifecycle phase they're
 
 For "install on first run," prefer commands that no-op when up-to-date (`pnpm install --silent`).
 
+Each hook is killed after `hook_timeout_ms` (default 60s) and the timeout is reported as a failure with a `(exit ?)` (null) code. A cold `pre_start` install of a heavy toolchain (Angular, Next) can exceed a minute — set `hook_timeout_ms` higher on that process (e.g. `600000`) so the install isn't killed mid-flight.
+
 ## `stop_command` — clean shutdown for CLI clients
 
 A process whose visible command is just a *client* of something else (the canonical case is `docker run`, where the container is owned by `dockerd` and survives the local CLI being killed) needs an explicit stop verb. Set `stop_command` to that verb — orckit runs it during shutdown instead of SIGTERM:

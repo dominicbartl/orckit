@@ -56,12 +56,20 @@ export const parseWebpackLine: LineParser = (rawLine) => {
   return null;
 };
 
+// Matches both the old webpack-based output ("Compiling...", "Generating browser
+// application bundles") and the current esbuild dev-server, which prints a
+// spinner line like "❯ Building..." / "✔ Building..." (hence \bBuilding\b rather
+// than an anchored ^Building — the line is prefixed by a glyph).
 const ANGULAR_BUILDING =
-  /(?:Compiling|^Building\b|Generating browser application bundles|Application bundle generation\b(?!.*complete))/;
+  /(?:Compiling|\bBuilding\b|Generating browser application bundles|Application bundle generation\b(?!.*(?:complete|failed)))/;
+// NOTE: do not match a bare "✔" here — esbuild emits "✔ Building..." mid-build,
+// which is NOT a completion. The real signal is the explicit phrase below (the
+// "✔ Application bundle generation complete" case still matches on the phrase).
 const ANGULAR_COMPLETE =
-  /(?:Compiled successfully|Application bundle generation complete|Build at:.*Time:\s*\d+\s*ms|✔)/;
+  /(?:Compiled successfully|Application bundle generation complete|Build at:.*Time:\s*\d+\s*ms)/;
 const ANGULAR_TIME = /Time:\s*(\d+)\s*ms/;
-const ANGULAR_FAIL = /(?:Failed to compile|Build failed|✖|ERROR\b)/;
+const ANGULAR_FAIL =
+  /(?:Failed to compile|Build failed|Application bundle generation failed|[✖✘]|ERROR\b)/;
 const ANGULAR_PROGRESS = /(\d{1,3})%/;
 
 export const parseAngularLine: LineParser = (rawLine) => {

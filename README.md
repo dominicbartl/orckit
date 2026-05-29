@@ -194,6 +194,10 @@ processes:
       pre_stop: 'echo stopping'     #   hook command's own stdout is not streamed.
       post_stop: 'echo stopped'
 
+    hook_timeout_ms: 60000   # max ms any single hook may run; default 60000.
+                             # Bump for slow pre_start installs (e.g. a cold
+                             # `pnpm install` of Angular/Next can exceed a minute).
+
     output:
       suppress: ['^node_modules', 'webpack-dev-middleware']  # regex; matches are dropped
       include: ['^ERROR']                                    # regex; ONLY matches are kept (if set)

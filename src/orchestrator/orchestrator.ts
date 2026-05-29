@@ -361,7 +361,18 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // `docker run` will surface the real error if docker itself is broken.
     await runDockerOrphanCleanup(handle.config);
 
-    await this.runHookSafe(name, 'pre_start');
+    // A failing pre_start hook runs BEFORE the process transitions out of
+    // `pending`, so without this it would throw and leave the process stuck in
+    // `pending` — boot neither aborts (no `failed` process) nor surfaces it.
+    // Mark it `failed` so it flows through the normal strict-failure / manual_retry
+    // path like any other spawn failure.
+    try {
+      await this.runHookSafe(name, 'pre_start');
+    } catch (err) {
+      this.applyEvent(name, { kind: 'fail' });
+      this.emit('process:failed', name, err as Error);
+      throw err;
+    }
 
     this.applyEvent(name, { kind: 'start' });
     this.emit('process:starting', name);
@@ -556,6 +567,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       await runHook(hook, handle.config.hooks, {
         cwd: handle.config.cwd,
         env: handle.config.env,
+        timeoutMs: handle.config.hook_timeout_ms,
       });
       this.emit('hook:complete', name, hook);
     } catch (err) {

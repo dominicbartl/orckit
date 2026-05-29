@@ -114,6 +114,13 @@ export const processConfigSchema = z
     max_retries: z.number().int().nonnegative().default(3),
     output: outputFilterSchema.optional(),
     hooks: hookConfigSchema.optional(),
+    /**
+     * Max time (ms) any single lifecycle hook (`pre_start` / `post_start` /
+     * `pre_stop` / `post_stop`) may run before it's killed and treated as a
+     * failure. Default 60s. Bump it for slow `pre_start` installs — e.g. a cold
+     * `pnpm install` of a heavy toolchain (Angular, Next) can exceed a minute.
+     */
+    hook_timeout_ms: z.number().int().positive().default(60_000),
     buffer_size: z.number().int().positive().default(1000),
     /**
      * When true, a boot-time failure of this process does NOT abort `orc start`.
