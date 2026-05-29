@@ -9,11 +9,7 @@ import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
 import { attachWebUi, type WebUiServerHandle } from './web/server.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
-import {
-  attachDashboard,
-  type DashboardHandle,
-  type DashboardLink,
-} from './reporter/dashboard.js';
+import { attachDashboard, type DashboardHandle, type DashboardLink } from './reporter/dashboard.js';
 import { buildGraph } from './graph/resolver.js';
 
 const program = new Command()

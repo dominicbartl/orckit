@@ -80,9 +80,9 @@ describe('parseAngularLine', () => {
   });
 
   it('detects esbuild bundle-complete with a seconds duration', () => {
-    expect(
-      parseAngularLine('Application bundle generation complete. [1.197 seconds]')?.type,
-    ).toBe('build:complete');
+    expect(parseAngularLine('Application bundle generation complete. [1.197 seconds]')?.type).toBe(
+      'build:complete',
+    );
   });
 
   it('detects esbuild bundle-generation failure', () => {

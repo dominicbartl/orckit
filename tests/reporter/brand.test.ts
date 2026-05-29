@@ -11,7 +11,6 @@ describe('brandMark', () => {
     expect(BRAND_MARK_WIDTH).toBe(9);
     for (const line of lines) expect(line).toMatch(/^█+$/);
   });
-
 });
 
 describe('brandHeader', () => {
@@ -28,7 +27,9 @@ describe('brandHeader', () => {
   });
 
   it('spills additional labels below the mark with aligned indentation', () => {
-    const out = stripAnsi(brandHeader(['orckit', 'my-app', 'web  http://x', 'mcp  http://y', 'logs /tmp']));
+    const out = stripAnsi(
+      brandHeader(['orckit', 'my-app', 'web  http://x', 'mcp  http://y', 'logs /tmp']),
+    );
     const rows = out.split('\n');
     expect(rows).toHaveLength(5);
     // Fifth row has no bar — the label sits at the same column as previous rows.
