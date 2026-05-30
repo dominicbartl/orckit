@@ -119,6 +119,60 @@ describe('attachCliReporter — hook activity', () => {
   });
 });
 
+describe('attachCliReporter — stop logging', () => {
+  it('logs which process is stopping, then that it stopped with duration', () => {
+    const captured: string[] = [];
+    const orckit = makeFakeOrckit();
+    attachCliReporter(orckit, { out: (m) => captured.push(m) });
+
+    orckit.emit('process:stopping', 'db');
+    orckit.emit('process:stopped', 'db', 120);
+
+    expect(captured[0]).toContain('db stopping');
+    expect(captured[1]).toContain('db stopped');
+    expect(captured[1]).toContain('120ms');
+  });
+
+  it('announces a SIGKILL force-kill but stays silent on SIGTERM', () => {
+    const captured: string[] = [];
+    const orckit = makeFakeOrckit();
+    attachCliReporter(orckit, { out: (m) => captured.push(m) });
+
+    orckit.emit('process:killed', 'db', 'SIGTERM');
+    expect(captured).toEqual([]);
+
+    orckit.emit('process:killed', 'db', 'SIGKILL');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toContain('db');
+    expect(captured[0]).toContain('force killing');
+  });
+
+  it('suppresses stop lines under quietProcessEvents (dashboard owns rendering)', () => {
+    const captured: string[] = [];
+    const orckit = makeFakeOrckit();
+    attachCliReporter(orckit, { out: (m) => captured.push(m), quietProcessEvents: true });
+
+    orckit.emit('process:stopping', 'db');
+    orckit.emit('process:killed', 'db', 'SIGKILL');
+    orckit.emit('process:stopped', 'db', 120);
+
+    expect(captured).toEqual([]);
+  });
+
+  it('surfaces a reaped orphan port even under quietProcessEvents', () => {
+    const captured: string[] = [];
+    const orckit = makeFakeOrckit();
+    attachCliReporter(orckit, { out: (m) => captured.push(m), quietProcessEvents: true });
+
+    orckit.emit('process:port-freed', 'emulators', 8080, 4321);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toContain('emulators');
+    expect(captured[0]).toContain('8080');
+    expect(captured[0]).toContain('4321');
+  });
+});
+
 describe('printFailureDump', () => {
   it('prints a header + error + tail block per failed process', () => {
     const outputs = new Map<string, OutputLine[]>([

@@ -72,9 +72,30 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
       `  ${chalk.green(STATE_ICON.finished)} ${name} finished ${chalk.dim(`(${formatDuration(ms)})`)}`,
     );
   };
-  const onStopped = (name: string) => {
+  const onStopping = (name: string) => {
     if (quiet) return;
-    out(`  ${chalk.gray(STATE_ICON.stopped)} ${name} stopped`);
+    out(chalk.gray(`  ${STATE_ICON.stopping} ${name} stopping`));
+  };
+  const onKilled = (name: string, signal: NodeJS.Signals) => {
+    if (quiet) return;
+    // SIGTERM is the normal graceful stop (already announced by `stopping`);
+    // only the SIGKILL escalation is worth a distinct, louder line.
+    if (signal !== 'SIGKILL') return;
+    out(
+      `  ${chalk.yellow('⚠')} ${name} ${chalk.yellow('did not exit in time — force killing (SIGKILL)')}`,
+    );
+  };
+  const onStopped = (name: string, durationMs?: number) => {
+    if (quiet) return;
+    const took = durationMs != null ? ` ${chalk.dim(`(${formatDuration(durationMs)})`)}` : '';
+    out(`  ${chalk.gray(STATE_ICON.stopped)} ${name} stopped${took}`);
+  };
+  // Ungated (like hook lines): a reaped orphan is worth surfacing even when the
+  // dashboard owns state rendering — it explains why a stuck port is now free.
+  const onPortFreed = (name: string, port: number, pid: number) => {
+    out(
+      `  ${chalk.yellow('⚑')} ${name} ${chalk.yellow(`freed port ${port}`)} ${chalk.dim(`(killed orphan pid ${pid})`)}`,
+    );
   };
   const onFailed = (name: string, err?: Error) => {
     if (!quiet) {
@@ -173,7 +194,10 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   orckit.on('process:starting', onStarting);
   orckit.on('process:ready', onReady);
   orckit.on('process:finished', onFinished);
+  orckit.on('process:stopping', onStopping);
+  orckit.on('process:killed', onKilled);
   orckit.on('process:stopped', onStopped);
+  orckit.on('process:port-freed', onPortFreed);
   orckit.on('process:failed', onFailed);
   orckit.on('process:restarting', onRestarting);
   orckit.on('hook:start', onHookStart);
@@ -189,7 +213,10 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     orckit.off('process:starting', onStarting);
     orckit.off('process:ready', onReady);
     orckit.off('process:finished', onFinished);
+    orckit.off('process:stopping', onStopping);
+    orckit.off('process:killed', onKilled);
     orckit.off('process:stopped', onStopped);
+    orckit.off('process:port-freed', onPortFreed);
     orckit.off('process:failed', onFailed);
     orckit.off('process:restarting', onRestarting);
     orckit.off('hook:start', onHookStart);
