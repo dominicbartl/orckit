@@ -1,6 +1,7 @@
 import { type Accessor, For, createEffect, createSignal, on, onCleanup } from 'solid-js';
 import { cx } from '../lib/cx';
-import type { OutputLine } from '../lib/types';
+import type { IdeLink, OutputLine } from '../lib/types';
+import { LinkedText } from './LinkedText';
 
 const HIGHLIGHT_CLASS: Record<string, string> = {
   red: 'text-hl-red',
@@ -20,6 +21,10 @@ interface LogViewProps {
   autoStick?: boolean;
   /** ARIA label / empty hint. */
   emptyHint?: string;
+  /** When set, file references in each line become `jetbrains://` deep links. */
+  ide?: IdeLink | null;
+  /** Emitting process's working dir; relative file refs resolve against it. */
+  baseDir?: string;
   class?: string;
 }
 
@@ -41,8 +46,7 @@ export function LogView(props: LogViewProps) {
 
   const handleScroll = () => {
     if (!viewport) return;
-    const distanceFromBottom =
-      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     setStuck(distanceFromBottom < 4);
   };
 
@@ -82,14 +86,26 @@ export function LogView(props: LogViewProps) {
             </div>
           }
         >
-          {(line) => <LogLine line={line} showStreamIndicator={props.showStreamIndicator} />}
+          {(line) => (
+            <LogLine
+              line={line}
+              showStreamIndicator={props.showStreamIndicator}
+              ide={props.ide ?? null}
+              baseDir={props.baseDir}
+            />
+          )}
         </For>
       </div>
     </div>
   );
 }
 
-function LogLine(props: { line: OutputLine; showStreamIndicator?: boolean }) {
+function LogLine(props: {
+  line: OutputLine;
+  showStreamIndicator?: boolean;
+  ide?: IdeLink | null;
+  baseDir?: string;
+}) {
   const colorClass = () =>
     props.line.highlight
       ? (HIGHLIGHT_CLASS[props.line.highlight] ?? '')
@@ -108,7 +124,9 @@ function LogLine(props: { line: OutputLine; showStreamIndicator?: boolean }) {
           aria-label={props.line.stream}
         />
       )}
-      <span class={cx('whitespace-pre-wrap break-all flex-1', colorClass())}>{props.line.text}</span>
+      <span class={cx('whitespace-pre-wrap break-all flex-1', colorClass())}>
+        <LinkedText text={props.line.text} ide={props.ide ?? null} baseDir={props.baseDir} />
+      </span>
     </div>
   );
 }

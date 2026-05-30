@@ -1,23 +1,15 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  type Accessor,
-} from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, type Accessor } from 'solid-js';
 import { Button } from '../components/Button';
 import { IconButton } from '../components/IconButton';
 import { Badge, StateBadge } from '../components/Badge';
+import { BuildBadge } from '../components/BuildBadge';
 import { Card } from '../components/Card';
 import { TabBar } from '../components/TabBar';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { LogView } from '../components/LogView';
-import {
-  ProcessGroup,
-  groupByCategory,
-} from '../components/ProcessGroup';
+import { LinkedText } from '../components/LinkedText';
+import { ProcessGroup, groupByCategory } from '../components/ProcessGroup';
 import { BrandMark } from '../components/Brand';
 import { IconPlay, IconRestart, IconStop, IconLogs, IconAlert, IconCopy } from '../lib/icons';
 import { useOrckit } from '../lib/stream';
@@ -39,6 +31,13 @@ function DashboardInner() {
   const orckit = useOrckit();
   const actions = useProcessActions();
   const [selected, setSelected] = createSignal<string | null>(null);
+
+  // Reflect the project in the tab title so multiple orckit sessions are
+  // distinguishable at a glance.
+  createEffect(() => {
+    const project = orckit.project();
+    document.title = project ? `${project} · orckit` : 'orckit · process orchestrator';
+  });
 
   // Auto-select the first process once a snapshot arrives so the right pane
   // isn't empty on first paint.
@@ -128,9 +127,7 @@ function ProjectHeader() {
   };
   return (
     <div class="px-4 py-3 border-b border-border-subtle">
-      <div class="text-[10px] uppercase tracking-wider font-mono text-fg-tertiary">
-        project
-      </div>
+      <div class="text-[10px] uppercase tracking-wider font-mono text-fg-tertiary">project</div>
       <div class="mt-0.5 flex items-center justify-between gap-2">
         <span class="text-sm font-medium text-fg-primary truncate" title={orckit.project()}>
           {orckit.project() || '—'}
@@ -156,7 +153,8 @@ function ProcessDetail(props: {
   logs: Accessor<OutputLine[]>;
 }) {
   const [tab, setTab] = createSignal<'logs' | 'errors' | 'details'>('logs');
-  const errorCount = () => (props.process().lastError ? 1 : 0);
+  const errorCount = () =>
+    (props.process().lastError ? 1 : 0) + (props.process().buildErrors?.length ?? 0);
 
   // Reset to "logs" when switching processes — avoids landing on "errors"
   // when the new process has none.
@@ -177,8 +175,7 @@ function ProcessDetail(props: {
             {
               id: 'errors',
               label: <>Errors</>,
-              badge:
-                errorCount() > 0 ? <Badge tone="danger">{errorCount()}</Badge> : undefined,
+              badge: errorCount() > 0 ? <Badge tone="danger">{errorCount()}</Badge> : undefined,
             },
             { id: 'details', label: <>Details</> },
           ]}
@@ -186,7 +183,11 @@ function ProcessDetail(props: {
       </div>
       <div class="flex-1 min-h-0 overflow-hidden p-5">
         <Show when={tab() === 'logs'}>
-          <LogPanel logs={props.logs} processName={props.process().name} />
+          <LogPanel
+            logs={props.logs}
+            processName={props.process().name}
+            cwd={props.process().cwd}
+          />
         </Show>
         <Show when={tab() === 'errors'}>
           <ErrorsPanel process={props.process} />
@@ -215,6 +216,9 @@ function DetailHeader(props: { process: Accessor<ProcessSnapshot> }) {
           <div class="flex items-center gap-2">
             <h1 class="font-mono text-lg font-medium text-fg-primary truncate">{p().name}</h1>
             <StateBadge state={p().state} />
+            <Show when={p().build}>
+              <BuildBadge build={p().build!} />
+            </Show>
             <Show when={p().category && p().category !== 'default'}>
               <Badge tone="accent">{p().category}</Badge>
             </Show>
@@ -299,7 +303,8 @@ function DetailHeader(props: { process: Accessor<ProcessSnapshot> }) {
   );
 }
 
-function LogPanel(props: { logs: Accessor<OutputLine[]>; processName: string }) {
+function LogPanel(props: { logs: Accessor<OutputLine[]>; processName: string; cwd: string }) {
+  const orckit = useOrckit();
   return (
     <div class="h-full flex flex-col gap-2">
       <div class="flex items-center justify-between">
@@ -321,7 +326,12 @@ function LogPanel(props: { logs: Accessor<OutputLine[]>; processName: string }) 
         </IconButton>
       </div>
       <div class="flex-1 min-h-0">
-        <LogView lines={props.logs} emptyHint={`no output from ${props.processName} yet`} />
+        <LogView
+          lines={props.logs}
+          ide={orckit.ide()}
+          baseDir={props.cwd}
+          emptyHint={`no output from ${props.processName} yet`}
+        />
       </div>
     </div>
   );
@@ -329,9 +339,12 @@ function LogPanel(props: { logs: Accessor<OutputLine[]>; processName: string }) 
 
 function ErrorsPanel(props: { process: Accessor<ProcessSnapshot> }) {
   const p = () => props.process();
+  const orckit = useOrckit();
+  const buildErrors = () => p().buildErrors ?? [];
+  const hasAny = () => Boolean(p().lastError) || buildErrors().length > 0;
   return (
     <Show
-      when={p().lastError}
+      when={hasAny()}
       fallback={
         <EmptyState
           icon={<IconAlert width={28} height={28} />}
@@ -340,24 +353,62 @@ function ErrorsPanel(props: { process: Accessor<ProcessSnapshot> }) {
         />
       }
     >
-      <Card>
-        <div class="flex items-start gap-3">
-          <span class="text-status-failed flex-shrink-0 mt-0.5">
-            <IconAlert width={18} height={18} />
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="text-sm font-medium text-fg-primary">Last error</div>
-            <pre class="mt-1 text-[12px] font-mono text-status-failed whitespace-pre-wrap break-all">
-              {p().lastError}
-            </pre>
-            <Show when={p().retries > 0}>
-              <div class="mt-3 text-[11px] font-mono text-fg-tertiary">
-                {p().retries} retry attempt{p().retries === 1 ? '' : 's'} consumed
+      <div class="flex flex-col gap-3">
+        <Show when={buildErrors().length > 0}>
+          <Card>
+            <div class="flex items-start gap-3">
+              <span class="text-status-failed flex-shrink-0 mt-0.5">
+                <IconAlert width={18} height={18} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="text-sm font-medium text-fg-primary">
+                  Build failed · {buildErrors().length}{' '}
+                  {buildErrors().length === 1 ? 'error' : 'errors'}
+                </div>
+                <div class="mt-2 flex flex-col gap-1.5">
+                  <For each={buildErrors()}>
+                    {(err) => (
+                      <pre class="text-[12px] font-mono text-status-failed whitespace-pre-wrap break-all">
+                        <LinkedText
+                          text={err}
+                          ide={orckit.ide()}
+                          baseDir={p().cwd}
+                          linkClass="text-status-failed"
+                        />
+                      </pre>
+                    )}
+                  </For>
+                </div>
               </div>
-            </Show>
-          </div>
-        </div>
-      </Card>
+            </div>
+          </Card>
+        </Show>
+        <Show when={p().lastError}>
+          <Card>
+            <div class="flex items-start gap-3">
+              <span class="text-status-failed flex-shrink-0 mt-0.5">
+                <IconAlert width={18} height={18} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="text-sm font-medium text-fg-primary">Last error</div>
+                <pre class="mt-1 text-[12px] font-mono text-status-failed whitespace-pre-wrap break-all">
+                  <LinkedText
+                    text={p().lastError ?? ''}
+                    ide={orckit.ide()}
+                    baseDir={p().cwd}
+                    linkClass="text-status-failed"
+                  />
+                </pre>
+                <Show when={p().retries > 0}>
+                  <div class="mt-3 text-[11px] font-mono text-fg-tertiary">
+                    {p().retries} retry attempt{p().retries === 1 ? '' : 's'} consumed
+                  </div>
+                </Show>
+              </div>
+            </div>
+          </Card>
+        </Show>
+      </div>
     </Show>
   );
 }
@@ -368,6 +419,9 @@ function DetailsPanel(props: { process: Accessor<ProcessSnapshot> }) {
     <Card>
       <dl class="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-[12px]">
         <Field label="State" value={<StateBadge state={p().state} />} />
+        <Show when={p().build}>
+          <Field label="Build" value={<BuildBadge build={p().build!} />} />
+        </Show>
         <Field label="Category" value={p().category || 'default'} mono />
         <Field label="Type" value={p().type} mono />
         <Field label="Command" value={p().command} mono />

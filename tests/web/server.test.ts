@@ -80,6 +80,62 @@ describe('attachWebUi over HTTP', () => {
     expect(api.lastError).toBeUndefined();
   });
 
+  it('GET /api/state surfaces build status after a process:build event', async () => {
+    orckit.emit('process:build', 'api', {
+      type: 'build:complete',
+      success: false,
+      errors: 21,
+      warnings: 0,
+    });
+    const res = await fetch(`${server.url}/api/state`);
+    const json = (await res.json()) as {
+      processes: Array<{ name: string; build?: { phase: string; errors?: number } }>;
+    };
+    const api = json.processes.find((p) => p.name === 'api')!;
+    expect(api.build).toEqual({
+      phase: 'done',
+      success: false,
+      errors: 21,
+      warnings: 0,
+      durationMs: undefined,
+    });
+  });
+
+  it('GET /api/state clears build status when a process restarts', async () => {
+    orckit.emit('process:build', 'api', { type: 'build:failed', reason: 'Failed to compile' });
+    orckit.emit('process:restarting', 'api', 1);
+    const res = await fetch(`${server.url}/api/state`);
+    const json = (await res.json()) as {
+      processes: Array<{ name: string; build?: unknown }>;
+    };
+    const api = json.processes.find((p) => p.name === 'api')!;
+    expect(api.build).toBeUndefined();
+  });
+
+  it('GET /events streams build status as a build event', async () => {
+    const res = await fetch(`${server.url}/events`, {
+      headers: { accept: 'text/event-stream' },
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    const readUntil = async (predicate: (buf: string) => boolean): Promise<string> => {
+      let buf = '';
+      while (!predicate(buf)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+      return buf;
+    };
+    await readUntil((b) => b.includes('event: snapshot'));
+    orckit.emit('process:build', 'api', { type: 'build:progress', percent: 62 });
+    const buf = await readUntil((b) => b.includes('event: build'));
+    expect(buf).toContain('event: build');
+    expect(buf).toContain('"phase":"building"');
+    expect(buf).toContain('"percent":62');
+    await reader.cancel();
+  });
+
   it('GET /api/output/:name returns recent output lines', async () => {
     const handle = (
       orckit as unknown as {

@@ -2,6 +2,7 @@ import { type JSX, Show } from 'solid-js';
 import { cx } from '../lib/cx';
 import type { ProcessSnapshot } from '../lib/types';
 import { Badge, StateBadge } from './Badge';
+import { BuildBadge } from './BuildBadge';
 import { IconButton } from './IconButton';
 import { IconRestart, IconStop, IconPlay, IconChevron } from '../lib/icons';
 
@@ -50,6 +51,9 @@ export function ProcessRow(props: ProcessRowProps) {
             {props.process.name}
           </span>
           <StateBadge state={props.process.state} />
+          <Show when={props.process.build}>
+            <BuildBadge build={props.process.build!} />
+          </Show>
           <Show when={props.process.optional}>
             <Badge tone="neutral">optional</Badge>
           </Show>

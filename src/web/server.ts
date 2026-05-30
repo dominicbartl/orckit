@@ -5,15 +5,22 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { Orckit } from '../orchestrator/orchestrator.js';
+import { reduceBuild, type BuildEvent, type BuildStatus } from '../process/parsers.js';
 import { buildSnapshot, recentOutput } from './snapshot.js';
 import { streamOrckitEvents } from './events.js';
 import { resolveStaticDir, serveStaticAsset } from './static.js';
+import type { IdeLink } from './ide.js';
 
 export interface WebUiServerOptions {
   /** Port to bind. Use 0 for an arbitrary free port. */
   port: number;
   /** Host to bind. Defaults to 127.0.0.1. */
   host?: string;
+  /**
+   * IDE deep-link descriptor. When set, file references in the dashboard's
+   * logs and errors become `jetbrains://` links. Null/undefined disables it.
+   */
+  ide?: IdeLink | null;
 }
 
 export interface WebUiServerHandle {
@@ -44,6 +51,7 @@ export async function attachWebUi(
   opts: WebUiServerOptions,
 ): Promise<WebUiServerHandle> {
   const host = opts.host ?? '127.0.0.1';
+  const ide = opts.ide ?? null;
   const staticDir = resolveStaticDir();
 
   // Track last error per process so the initial snapshot can surface it
@@ -57,6 +65,36 @@ export async function attachWebUi(
   };
   orckit.on('process:failed', onFailed);
   orckit.on('process:ready', onReady);
+
+  // Track the latest build status per process so reconnecting clients (and the
+  // initial snapshot) see the current build state, not just live deltas. SSE
+  // listeners, like the dashboard reporter, only observe *new* build events.
+  const builds = new Map<string, BuildStatus>();
+  // The diagnostic lines from the latest failing build, accumulated across the
+  // stream of build:failed events (each carries one error) so the snapshot and
+  // the Errors panel can list them. A build:start (rebuild) or a successful
+  // completion clears the list.
+  const buildErrors = new Map<string, string[]>();
+  const MAX_BUILD_ERRORS = 50;
+  const onBuild = (name: string, event: BuildEvent) => {
+    builds.set(name, reduceBuild(event));
+    if (event.type === 'build:start') {
+      buildErrors.delete(name);
+    } else if (event.type === 'build:complete' && event.success) {
+      buildErrors.delete(name);
+    } else if (event.type === 'build:failed' && event.reason) {
+      const list = buildErrors.get(name) ?? [];
+      if (list.length < MAX_BUILD_ERRORS) list.push(event.reason);
+      buildErrors.set(name, list);
+    }
+  };
+  const onRestarting = (name: string) => {
+    // A fresh boot of the process supersedes its prior build outcome.
+    builds.delete(name);
+    buildErrors.delete(name);
+  };
+  orckit.on('process:build', onBuild);
+  orckit.on('process:restarting', onRestarting);
 
   const activeEventStreams = new Set<ServerResponse>();
 
@@ -78,7 +116,7 @@ export async function attachWebUi(
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && path === '/api/state') {
-      sendJson(res, 200, buildSnapshot(orckit, { lastErrors }));
+      sendJson(res, 200, buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide }));
       return;
     }
 
@@ -187,7 +225,9 @@ export async function attachWebUi(
     // Initial snapshot as the first event so the client doesn't need a
     // separate /api/state fetch when it reconnects.
     res.write(`event: snapshot\n`);
-    res.write(`data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors }))}\n\n`);
+    res.write(
+      `data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide }))}\n\n`,
+    );
   }
 
   await listen(http, opts.port, host);
@@ -201,6 +241,8 @@ export async function attachWebUi(
     async dispose() {
       orckit.off('process:failed', onFailed);
       orckit.off('process:ready', onReady);
+      orckit.off('process:build', onBuild);
+      orckit.off('process:restarting', onRestarting);
       for (const stream of activeEventStreams) {
         try {
           stream.end();

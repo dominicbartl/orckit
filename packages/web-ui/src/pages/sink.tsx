@@ -2,6 +2,7 @@ import { For, createSignal, type JSX } from 'solid-js';
 import { Button } from '../components/Button';
 import { IconButton } from '../components/IconButton';
 import { Badge, StateBadge } from '../components/Badge';
+import { BuildBadge } from '../components/BuildBadge';
 import { StatusDot } from '../components/StatusDot';
 import { Card, CardHeader, SectionDivider } from '../components/Card';
 import { TabBar } from '../components/TabBar';
@@ -20,7 +21,16 @@ import {
   IconSearch,
   IconSettings,
 } from '../lib/icons';
-import type { OutputLine, ProcessSnapshot, ProcessState } from '../lib/types';
+import type { BuildStatus, IdeLink, OutputLine, ProcessSnapshot, ProcessState } from '../lib/types';
+
+const BUILD_STATES: BuildStatus[] = [
+  { phase: 'building' },
+  { phase: 'building', percent: 62 },
+  { phase: 'done', success: true, errors: 0, warnings: 0, durationMs: 1840 },
+  { phase: 'done', success: true, errors: 0, warnings: 3, durationMs: 2210 },
+  { phase: 'done', success: false, errors: 21, warnings: 0 },
+  { phase: 'failed', reason: 'Failed to compile' },
+];
 
 const STATES: ProcessState[] = [
   'pending',
@@ -36,7 +46,11 @@ const STATES: ProcessState[] = [
 const SAMPLE_LINES: OutputLine[] = [
   { text: '> next dev', stream: 'stdout', timestamp: Date.now() - 8000 },
   { text: '   ▲ Next.js 15.0.3', stream: 'stdout', timestamp: Date.now() - 7800 },
-  { text: '   - Local:        http://localhost:3000', stream: 'stdout', timestamp: Date.now() - 7600 },
+  {
+    text: '   - Local:        http://localhost:3000',
+    stream: 'stdout',
+    timestamp: Date.now() - 7600,
+  },
   {
     text: '   - Network:      http://192.168.1.7:3000',
     stream: 'stdout',
@@ -77,6 +91,14 @@ const SAMPLE_LINES: OutputLine[] = [
   },
 ];
 
+// Stand-in for a detected JetBrains project so the log view can demonstrate
+// `jetbrains://` deep links on file references like `lib/redis/connect.ts:42:18`.
+const SAMPLE_IDE: IdeLink = {
+  toolTag: 'web-storm',
+  project: 'acme-web',
+  root: '/Users/dev/acme-web',
+};
+
 const SAMPLE_PROCESSES: ProcessSnapshot[] = [
   {
     name: 'postgres',
@@ -89,6 +111,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: Date.now() - 60_000,
     retries: 0,
     optional: false,
+    cwd: '/Users/dev/acme-web',
   },
   {
     name: 'redis',
@@ -101,6 +124,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: null,
     retries: 2,
     optional: false,
+    cwd: '/Users/dev/acme-web',
     lastError: 'exited (code 1) — port 6379 in use',
   },
   {
@@ -114,6 +138,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: Date.now() - 50_000,
     retries: 0,
     optional: false,
+    cwd: '/Users/dev/acme-web',
   },
   {
     name: 'api',
@@ -126,10 +151,11 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: Date.now() - 30_000,
     retries: 0,
     optional: false,
+    cwd: '/Users/dev/acme-web',
   },
   {
     name: 'web',
-    state: 'starting',
+    state: 'running',
     type: 'webpack',
     command: 'pnpm dev --filter web',
     category: 'frontend',
@@ -138,6 +164,14 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: Date.now() - 5000,
     retries: 0,
     optional: false,
+    cwd: '/Users/dev/acme-web',
+    // Dev server stays up across a failed recompile — the build badge flags the
+    // breakage and the captured diagnostics surface in the Errors tab.
+    build: { phase: 'done', success: false, errors: 2, warnings: 0 },
+    buildErrors: [
+      'ERROR in ./src/app/app.component.ts:25:7 - TS2322: Type mismatch.',
+      'ERROR in ./src/app/app.component.ts:30:11 - TS1434: Unexpected keyword.',
+    ],
   },
   {
     name: 'worker',
@@ -150,6 +184,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     startedAt: null,
     retries: 0,
     optional: false,
+    cwd: '/Users/dev/acme-web',
   },
 ];
 
@@ -171,7 +206,10 @@ export default function Sink() {
           <SwatchGrid />
         </Section>
 
-        <Section title="Status" subtitle="Every ProcessState the orchestrator can be in, mapped to dot + badge.">
+        <Section
+          title="Status"
+          subtitle="Every ProcessState the orchestrator can be in, mapped to dot + badge."
+        >
           <Card>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3">
               <For each={STATES}>
@@ -186,7 +224,21 @@ export default function Sink() {
           </Card>
         </Section>
 
-        <Section title="Buttons" subtitle="Variants, sizes, and the loading state used during restart actions.">
+        <Section
+          title="Build status"
+          subtitle="For webpack/angular processes — the latest build outcome, shown independently of process state so a failed recompile on a still-running dev server stays visible."
+        >
+          <Card>
+            <div class="flex flex-wrap items-center gap-3">
+              <For each={BUILD_STATES}>{(build) => <BuildBadge build={build} />}</For>
+            </div>
+          </Card>
+        </Section>
+
+        <Section
+          title="Buttons"
+          subtitle="Variants, sizes, and the loading state used during restart actions."
+        >
           <Card>
             <div class="space-y-5">
               <Row label="Variants">
@@ -292,7 +344,10 @@ export default function Sink() {
           </Card>
         </Section>
 
-        <Section title="Cards" subtitle="Surface containers — process cards reuse this with header + actions.">
+        <Section
+          title="Cards"
+          subtitle="Surface containers — process cards reuse this with header + actions."
+        >
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card>
               <CardHeader
@@ -308,7 +363,11 @@ export default function Sink() {
                 }
               />
               <SectionDivider label="last 1 min" />
-              <Sparkline values={[2, 4, 3, 6, 7, 5, 9, 12, 8, 11, 10, 14]} width={280} height={32} />
+              <Sparkline
+                values={[2, 4, 3, 6, 7, 5, 9, 12, 8, 11, 10, 14]}
+                width={280}
+                height={32}
+              />
             </Card>
             <Card>
               <CardHeader
@@ -316,9 +375,7 @@ export default function Sink() {
                 subtitle="docker compose up redis"
                 trailing={<StateBadge state="failed" />}
               />
-              <p class="text-xs text-status-failed font-mono">
-                exited (code 1) — port 6379 in use
-              </p>
+              <p class="text-xs text-status-failed font-mono">exited (code 1) — port 6379 in use</p>
             </Card>
           </div>
         </Section>
@@ -345,7 +402,23 @@ export default function Sink() {
           </div>
         </Section>
 
-        <Section title="Empty state" subtitle="When there's no data, no errors, or nothing selected.">
+        <Section
+          title="Log view — IDE deep links"
+          subtitle="When a JetBrains project is detected, file refs (e.g. lib/redis/connect.ts:42:18) become jetbrains:// links. Relative refs are resolved against the process's cwd — here packages/api — so the link points at packages/api/lib/redis/connect.ts."
+        >
+          <div class="h-64">
+            <LogView
+              lines={() => SAMPLE_LINES}
+              ide={SAMPLE_IDE}
+              baseDir={`${SAMPLE_IDE.root}/packages/api`}
+            />
+          </div>
+        </Section>
+
+        <Section
+          title="Empty state"
+          subtitle="When there's no data, no errors, or nothing selected."
+        >
           <Card>
             <EmptyState
               icon={<IconLogs width={28} height={28} />}
@@ -360,7 +433,10 @@ export default function Sink() {
           </Card>
         </Section>
 
-        <Section title="Toasts" subtitle="Transient feedback for restart, stop, and connection events.">
+        <Section
+          title="Toasts"
+          subtitle="Transient feedback for restart, stop, and connection events."
+        >
           <div class="space-y-2 max-w-md">
             <Toast tone="success" title="api restarted" description="Healthy after 1.2s." />
             <Toast
@@ -385,7 +461,10 @@ export default function Sink() {
           </div>
         </Section>
 
-        <Section title="Brand" subtitle="The wave motif — four stacked bars echoing dependency waves.">
+        <Section
+          title="Brand"
+          subtitle="The wave motif — four stacked bars echoing dependency waves."
+        >
           <Card>
             <div class="flex items-center gap-8">
               <BrandLogo />
@@ -409,8 +488,8 @@ function PageHeader() {
       </div>
       <h1 class="mt-2 text-2xl font-medium text-fg-primary tracking-tight">Kitchen sink</h1>
       <p class="mt-1 text-sm text-fg-tertiary max-w-xl">
-        Every component the orckit dashboard uses, in every state. No live data — these are
-        static fixtures so you can verify color, spacing, and behavior in isolation.
+        Every component the orckit dashboard uses, in every state. No live data — these are static
+        fixtures so you can verify color, spacing, and behavior in isolation.
       </p>
     </div>
   );

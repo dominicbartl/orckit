@@ -1,6 +1,13 @@
 import { createContext, createSignal, onCleanup, useContext, type Accessor } from 'solid-js';
 import { createStore, produce, type SetStoreFunction } from 'solid-js/store';
-import type { OrckitSnapshot, OutputLine, ProcessSnapshot, ProcessState } from './types';
+import type {
+  BuildStatus,
+  IdeLink,
+  OrckitSnapshot,
+  OutputLine,
+  ProcessSnapshot,
+  ProcessState,
+} from './types';
 import { fetchOutput, fetchState } from './api';
 
 /** Maximum buffered log lines per process — mirrors orckit's default buffer cap. */
@@ -11,6 +18,8 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'di
 export interface OrckitStream {
   /** Project name from the snapshot. */
   project: Accessor<string>;
+  /** IDE deep-link descriptor, or null when not a JetBrains project. */
+  ide: Accessor<IdeLink | null>;
   /** List of all processes, reactive. */
   processes: Accessor<ProcessSnapshot[]>;
   /** Look up a process by name. */
@@ -34,6 +43,7 @@ interface BootSummary {
 
 interface StoreShape {
   project: string;
+  ide: IdeLink | null;
   processes: Record<string, ProcessSnapshot>;
   /** Insertion order — kept in sync with snapshots so the dashboard list is stable. */
   order: string[];
@@ -44,6 +54,7 @@ interface StoreShape {
 
 const initialStore: StoreShape = {
   project: '',
+  ide: null,
   processes: {},
   order: [],
   logs: {},
@@ -110,6 +121,7 @@ export function createOrckitStream(): OrckitStream {
 
   return {
     project: () => store.project,
+    ide: () => store.ide,
     processes: () => store.order.map((n) => store.processes[n]!).filter(Boolean),
     process: (name) => store.processes[name],
     logsFor: (name) => () => store.logs[name] ?? [],
@@ -130,6 +142,7 @@ function applySnapshot(setStore: SetStoreFunction<StoreShape>, snap: OrckitSnaps
   setStore(
     produce((s) => {
       s.project = snap.project;
+      s.ide = snap.ide;
       // Preserve any logs we've already buffered — snapshots don't carry them.
       const existingLogs = s.logs;
       const nextProcesses: Record<string, ProcessSnapshot> = {};
@@ -191,7 +204,30 @@ function bindHandlers(source: EventSource, setStore: SetStoreFunction<StoreShape
     setStore(
       produce((s) => {
         const p = s.processes[name];
-        if (p) p.retries = attempt;
+        if (p) {
+          p.retries = attempt;
+          // A fresh boot supersedes the prior build outcome — mirrors the server.
+          p.build = undefined;
+          p.buildErrors = undefined;
+        }
+      }),
+    );
+  });
+
+  source.addEventListener('build', (e) => {
+    const { name, build } = parse<{ name: string; build: BuildStatus }>(e);
+    setStore(
+      produce((s) => {
+        const p = s.processes[name];
+        if (!p) return;
+        // Mirror the server's accumulation: a rebuild or a clean completion
+        // clears the error list; each failed delta carries one diagnostic line.
+        if (build.phase === 'building' || (build.phase === 'done' && build.success)) {
+          p.buildErrors = [];
+        } else if (build.phase === 'failed' && build.reason) {
+          p.buildErrors = [...(p.buildErrors ?? []), build.reason].slice(-50);
+        }
+        p.build = build;
       }),
     );
   });
@@ -238,7 +274,10 @@ function parse<T>(e: Event): T {
 
 const Context = createContext<OrckitStream | null>(null);
 
-export function OrckitProvider(props: { stream: OrckitStream; children: import('solid-js').JSX.Element }) {
+export function OrckitProvider(props: {
+  stream: OrckitStream;
+  children: import('solid-js').JSX.Element;
+}) {
   return <Context.Provider value={props.stream}>{props.children}</Context.Provider>;
 }
 
