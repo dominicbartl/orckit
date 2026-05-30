@@ -30,6 +30,34 @@ describe('runHook', () => {
     await runHook('pre_start', { pre_start: '[ "$MY_VAR" = "yes" ]' }, { env: { MY_VAR: 'yes' } });
   });
 
+  it('streams stdout/stderr line-by-line to onLine when given', async () => {
+    const lines: Array<[string, string]> = [];
+    await runHook(
+      'pre_stop',
+      { pre_stop: 'echo one; echo two; echo err 1>&2' },
+      { onLine: (text, stream) => lines.push([text, stream]) },
+    );
+    expect(lines).toContainEqual(['one', 'stdout']);
+    expect(lines).toContainEqual(['two', 'stdout']);
+    expect(lines).toContainEqual(['err', 'stderr']);
+  });
+
+  it('still captures stderr in the error while streaming', async () => {
+    const lines: Array<[string, string]> = [];
+    try {
+      await runHook(
+        'pre_stop',
+        { pre_stop: 'echo boom 1>&2; exit 1' },
+        { onLine: (text, stream) => lines.push([text, stream]) },
+      );
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HookError);
+      expect((err as HookError).stderr).toContain('boom');
+      expect(lines).toContainEqual(['boom', 'stderr']);
+    }
+  });
+
   it('kills a hook that exceeds timeoutMs and reports a null exit code', async () => {
     try {
       await runHook('pre_start', { pre_start: 'sleep 5' }, { timeoutMs: 200 });
