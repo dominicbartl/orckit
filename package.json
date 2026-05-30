@@ -1,6 +1,6 @@
 {
   "name": "@orckit/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lean CLI process orchestrator for local development environments",
   "keywords": [
     "orchestration",
