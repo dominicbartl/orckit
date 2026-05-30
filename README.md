@@ -59,7 +59,7 @@ project: my-app
 
 processes:
   db:
-    type: docker                           # auto-wires stop + orphan cleanup
+    type: docker                           # SIGTERM the CLI, then docker rm -f the container
     container_name: my-app-db
     command: docker run --rm --name=my-app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
     ready:
@@ -102,7 +102,7 @@ When stdout is a TTY, `orc start` pins a persistent dashboard to the bottom of t
 
 Preflight banners, failure tails (the recent stdout/stderr dump after a process dies), and `--show-output` lines print *above* the dashboard so they stay in scrollback while the live region keeps tracking state below them.
 
-The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
+The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your IDE via the Toolbox `jetbrains://` URL scheme. Configure it with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
 
 Pass `--no-live` to skip the dashboard entirely and get plain line-by-line lifecycle output plus the REPL.
 
@@ -120,6 +120,21 @@ mcp:                         # optional; on by default
   port: 7676                 # default: 7676
   host: 127.0.0.1            # default: 127.0.0.1
 
+ide:                         # optional; on by default. Deep-links file refs in
+                             # the web dashboard's logs + errors to your IDE.
+  enabled: true              # default: true. When a `.idea` folder is found at
+                             #   or above the config, file references like
+                             #   `src/app.ts:42:10` in the dashboard become
+                             #   clickable `jetbrains://` links that open the
+                             #   file at the line in your running IDE. No `.idea`
+                             #   → no links. Has no effect on the terminal UI.
+  tool: webstorm             # default: webstorm. Which JetBrains IDE the links
+                             #   target — a `.idea` folder can't tell them apart.
+                             #   One of: webstorm, intellij, pycharm, phpstorm,
+                             #   goland, rubymine, clion, rider, rustrover, datagrip
+  project: my-project        # optional; override the IDE project name. Defaults
+                             #   to `.idea/.name` or the project folder's basename.
+
 preflight:                   # optional pre-startup checks (run in parallel)
   - name: docker-up
     command: docker info >/dev/null
@@ -130,14 +145,15 @@ processes:
     type: bash | webpack | angular | docker   # default: bash
     command: <shell command>          # required
     container_name: <name>            # required when type: docker; rejected otherwise.
-                                      # Used to auto-fill stop_command and to nuke
-                                      # orphan containers before spawn.
+                                      # The container is `docker rm -f`'d both before spawn
+                                      # (clears an orphan from a crashed run) and after stop
+                                      # (frees its ports). Must match the `--name=` in command.
     stop_command: <shell command>     # optional; run *instead of* SIGTERM during shutdown.
-                                      # Use for CLI clients managing external state — e.g.
-                                      # `docker stop <name>` for a `docker run --name <name> ...`
-                                      # process. Falls back to SIGKILL if the main process is
-                                      # still alive after the grace period.
-                                      # For `type: docker` defaults to `docker rm -f <container_name>`.
+                                      # Use for CLI clients managing external state that the
+                                      # docker type can't express — e.g. `docker compose down`
+                                      # for a `docker compose up` process. Falls back to SIGKILL
+                                      # if the main process is still alive after the grace period.
+                                      # `type: docker` does NOT need this.
     cwd: <path>                       # default: current dir
     category: <string>                # cosmetic grouping; default: 'default'
     env: { KEY: value }
@@ -188,6 +204,19 @@ processes:
     #             an optional one — that would force the optional one to
     #             always start.
 
+    ports: [8080, 9099, 4000]       # default: []. Ports this process binds.
+    kill_orphan_ports: true         # default: false. After the normal stop path
+                                    # (SIGTERM → grace → SIGKILL of the whole
+                                    # process group/tree), force-kill anything
+                                    # still bound to one of `ports`. For tools
+                                    # whose children escape the process group and
+                                    # keep a port bound after the tree is gone —
+                                    # classically the JVM-based Firebase emulators.
+                                    # POSIX-only (needs `lsof`); kills *whatever*
+                                    # owns the port, so only enable it for ports
+                                    # you know are yours. A `tcp` ready-check port
+                                    # is swept automatically, no need to repeat it.
+
     hooks:                          # orc announces each as `↪ <name> <hook> hook`
       pre_start: 'npm install'      #   when it fires; a failing hook shows in red
       post_start: 'echo ready'      #   (a failing pre_start aborts the spawn). The
@@ -213,7 +242,7 @@ processes:
 - **bash** — default. Runs the command via `bash -c`.
 - **webpack** — same as bash, plus a stdout parser that emits `build:start` / `build:progress` / `build:complete` / `build:failed` events on standard webpack output.
 - **angular** — same as bash, plus an Angular CLI output parser.
-- **docker** — same as bash, plus two conveniences for `docker run`-style commands. Before every spawn, orckit runs `docker rm -f <container_name>` so a container left behind by a previous crashed run doesn't block the new `docker run --name <container_name> ...` with a name conflict. And `stop_command` defaults to `docker rm -f <container_name>`, so Ctrl-C tears the container down even though the local `docker` CLI was just a client. `container_name` is required and must match the `--name=` in `command`. Orphan-cleanup failures (no such container, daemon down, docker not installed) are silently ignored — the `docker run` itself surfaces the real error.
+- **docker** — same as bash, plus automatic container lifecycle management for `docker run`-style commands. A `docker run`'s container is owned by the daemon, not the local CLI, so killing the CLI leaves the container (and its published ports) running. To handle that, orckit `docker rm -f <container_name>`s the container at two points: **before every spawn** (so a container left behind by a previous crashed run doesn't block the new `docker run --name <container_name> ...` with a name conflict), and **after the process is stopped or killed** (so the container is gone and its ports are free for the next boot). On shutdown the `docker run` CLI itself gets a normal SIGTERM — Docker forwards it to the container for a graceful stop — and the `docker rm -f` then guarantees removal even if the container ignored the signal or the CLI was SIGKILLed. `container_name` is required and must match the `--name=` in `command`. Cleanup failures (no such container, daemon down, docker not installed) are silently ignored — the `docker run` itself surfaces the real error.
 
 ```yaml
 processes:
@@ -224,7 +253,7 @@ processes:
     ready: { type: tcp, port: 5432 }
 ```
 
-For shapes orckit's docker defaults don't cover (e.g. `docker compose up` / `docker compose down`), stay on `type: bash` with an explicit `stop_command`.
+For shapes a single `container_name` can't cover (e.g. `docker compose up` / `docker compose down`), stay on `type: bash` with an explicit `stop_command`.
 
 The parsers are best-effort regex against modern tool output and exist purely so the CLI reporter can show useful build status. If you don't care about that, just use `bash`.
 
@@ -318,12 +347,16 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `process:ready` | `name`, `durationMs` — long-running process passed its health check (not emitted for `ready: exit-code`) |
 | `process:running` | `name` — long-running process is now in operational state |
 | `process:finished` | `name`, `durationMs` — one-shot (`ready: exit-code`) completed successfully |
-| `process:stopped` | `name` |
+| `process:stopping` | `name` — graceful stop has begun (SIGTERM sent / `stop_command` run) |
+| `process:killed` | `name`, `signal` — a termination signal was sent; `SIGTERM` on graceful stop, `SIGKILL` if the grace window expired and the process had to be force-killed |
+| `process:port-freed` | `name`, `port`, `pid` — an orphan still holding one of the process's `ports` was force-killed by the post-stop sweep (`kill_orphan_ports`) |
+| `process:stopped` | `name`, `durationMs?` — process has exited; duration is how long the stop took |
 | `process:failed` | `name`, `Error?` |
 | `process:restarting` | `name`, `attempt` |
 | `process:line` | `name`, `OutputLine` |
 | `process:build` | `name`, `BuildEvent` |
 | `hook:start` / `hook:complete` / `hook:failed` | `name`, `hook`, `Error?` |
+| `hook:line` | `name`, `hook`, `text`, `stream` — a single stdout/stderr line streamed from a running lifecycle hook |
 | `boot:complete` | `{ ready: string[], failed: string[], pending: string[] }` — always fires after `start()` |
 | `all:ready` | `names: string[]` — only fires when nothing failed and nothing pending |
 

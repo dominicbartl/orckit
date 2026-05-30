@@ -29,6 +29,8 @@ export type {
   LogsConfig,
   McpConfig,
   WebConfig,
+  IdeConfig,
+  IdeTool,
 } from './config/schema.js';
 
 export {
@@ -82,3 +84,4 @@ export {
 
 export { attachMcpServer, type McpServerOptions, type McpServerHandle } from './mcp/server.js';
 export { attachWebUi, type WebUiServerOptions, type WebUiServerHandle } from './web/server.js';
+export { detectIde, type IdeLink, type DetectIdeOptions } from './web/ide.js';

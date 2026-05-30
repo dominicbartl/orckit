@@ -1,12 +1,15 @@
 #!/usr/bin/env node
+import { dirname, resolve } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, ConfigError } from './config/load.js';
 import { BootFailedError, Orckit } from './orchestrator/orchestrator.js';
 import { attachCliReporter, printFailureDump, renderStatus } from './reporter/cli-reporter.js';
+import { attachShutdownReporter } from './reporter/shutdown-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
 import { attachWebUi, type WebUiServerHandle } from './web/server.js';
+import { detectIde } from './web/ide.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
 import { attachDashboard, type DashboardHandle, type DashboardLink } from './reporter/dashboard.js';
@@ -163,13 +166,23 @@ program
           ),
         );
       } else if (cliWebEnabled && config.web.enabled) {
+        // Detect a JetBrains project so the dashboard can deep-link file
+        // references in logs/errors. Search from the config file's directory.
+        const ide = config.ide.enabled
+          ? detectIde(dirname(resolve(opts.config)), {
+              tool: config.ide.tool,
+              project: config.ide.project,
+            })
+          : null;
         try {
           webServer = await attachWebUi(orckit, {
             port: cliWebPort ?? config.web.port,
             host: config.web.host,
+            ide,
           });
           // Web dashboard is the headline action surface — show it first.
           links.unshift({ label: 'web', value: webServer.url });
+          if (ide) links.push({ label: 'ide', value: `${ide.toolTag} · ${ide.project}` });
         } catch (err) {
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
           console.error(
@@ -190,10 +203,14 @@ program
 
       let repl: Repl | null = null;
 
+      // Captured so the shutdown handler can swap the live reporter out for the
+      // verbose shutdown reporter without double-printing stop lines.
+      let detachReporter: () => void = () => {};
+
       if (dashboard) {
         // Links already render in the dashboard header. The browser is the
         // action surface when the dashboard is on, so the REPL stays detached.
-        attachCliReporter(orckit, {
+        detachReporter = attachCliReporter(orckit, {
           showOutput: opts.showOutput,
           showBuild: opts.showBuild,
           out: dashboard.printAbove,
@@ -210,7 +227,7 @@ program
         }
         if (webServer) console.log(chalk.dim(`  web:  ${webServer.url}`));
 
-        attachCliReporter(orckit, {
+        detachReporter = attachCliReporter(orckit, {
           showOutput: opts.showOutput,
           showBuild: opts.showBuild,
           printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
@@ -229,11 +246,16 @@ program
         }
         shuttingDown = true;
         dashboard?.dispose();
+        repl?.detach();
+        // Swap the live reporter for the verbose shutdown reporter so teardown
+        // logs which process is stopping, whether it stopped or timed out, and
+        // pipes each process's + hook's output as it drains.
+        detachReporter();
+        attachShutdownReporter(orckit);
         console.log(chalk.yellow(`\n  received ${signal}, stopping...`));
         console.log(
           chalk.dim('  (graceful shutdown — press Ctrl-C again to force-quit immediately)'),
         );
-        repl?.detach();
         await orckit.dispose();
         await logReporter?.dispose();
         await mcpServer?.dispose();

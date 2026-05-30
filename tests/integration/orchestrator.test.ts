@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import type { OrckitConfig } from '../../src/config/schema.js';
 import { validateConfig } from '../../src/config/load.js';
+import { isPortFree } from '../../src/util/port.js';
 
 function makeConfig(
   processes: Record<string, Record<string, unknown>>,
@@ -317,6 +318,70 @@ describe('Orckit end-to-end', () => {
     expect(orckit.state('s')).toBe('running');
     await orckit.stop();
     expect(orckit.state('s')).toBe('stopped');
+  });
+
+  it('tears multiple processes down concurrently, not one-at-a-time', async () => {
+    // Guards the shutdown regression where each process waited out its own grace
+    // window in series — a dozen processes turned Ctrl-C into a minute-long
+    // "hang". Parallel teardown signals every process up front, so all three
+    // 'stopping' events fire before the first one finishes ('stopped').
+    // Sequential teardown would interleave them: stopping, stopped, stopping…
+    const proc = { command: 'echo up; sleep 600', ready: { type: 'log-pattern', pattern: 'up' } };
+    orckit = new Orckit(makeConfig({ a: proc, b: proc, c: proc }));
+    await orckit.start();
+    const log: string[] = [];
+    orckit.on('process:stopping', () => log.push('stopping'));
+    orckit.on('process:stopped', () => log.push('stopped'));
+    await orckit.stop();
+    expect(orckit.state('a')).toBe('stopped');
+    expect(orckit.state('c')).toBe('stopped');
+    const firstStopped = log.indexOf('stopped');
+    const stoppingsFirst = log.slice(0, firstStopped).filter((e) => e === 'stopping').length;
+    expect(stoppingsFirst).toBe(3);
+  });
+
+  it('sweeps orphan ports after stop when kill_orphan_ports is set', async () => {
+    // Reserve a free port, then have the process spawn a holder that escapes the
+    // process group (`set -m` gives it its own group; the subshell exit reparents
+    // it to init) so it survives the tree kill and keeps the port bound — the
+    // emulator-orphan shape. The post-stop sweep must reap it and free the port.
+    const port = await new Promise<number>((resolve) => {
+      const r = createNetServer();
+      r.listen(0, '127.0.0.1', () => {
+        const addr = r.address();
+        const p = typeof addr === 'object' && addr ? addr.port : 0;
+        r.close(() => resolve(p));
+      });
+    });
+    const holder = `${process.execPath} -e "require('net').createServer().listen(${port},'127.0.0.1');setTimeout(()=>process.exit(0),30000)"`;
+    orckit = new Orckit(
+      makeConfig({
+        em: {
+          // `set -m` is scoped to the subshell so only the *holder* escapes into
+          // its own process group (and reparents to init when the subshell
+          // exits); the main `sleep 600` stays in orc's group and dies fast on
+          // SIGTERM. The holder's stdio is redirected so it doesn't keep orc's
+          // pipe open (the post-SIGKILL reap path is covered in runner.test.ts).
+          // What's left for the sweep to do: reap the escaped, port-holding child.
+          command: `( set -m; ${holder} >/dev/null 2>&1 & ); echo ready; sleep 600`,
+          ready: { type: 'log-pattern', pattern: 'ready' },
+          ports: [port],
+          kill_orphan_ports: true,
+        },
+      }),
+    );
+    const freed: number[] = [];
+    orckit.on('process:port-freed', (_n, p) => freed.push(p));
+    await orckit.start();
+    // Wait for the escaped holder to actually bind the port.
+    for (let i = 0; i < 100 && (await isPortFree(port)); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(await isPortFree(port)).toBe(false);
+    await orckit.stop();
+    await new Promise((r) => setTimeout(r, 150)); // beat for the kernel to release the socket
+    expect(freed).toContain(port);
+    expect(await isPortFree(port)).toBe(true);
   });
 
   it('starts only targeted processes plus their dependencies', async () => {

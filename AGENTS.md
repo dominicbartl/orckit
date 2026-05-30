@@ -70,7 +70,7 @@ Waves are computed automatically — `api` and `worker` would run in parallel if
 - `type: bash` — default. Use unless one of the next three applies.
 - `type: webpack` — only when *this process's* stdout is real webpack output. Adds a parser that emits `build:start`/`build:complete` events the reporter uses for progress display. Wrong `type` is not fatal — you just lose the progress UI.
 - `type: angular` — same idea for Angular CLI output.
-- `type: docker` — the process **is** a `docker run --name <X> ...`. Requires `container_name: <X>` (must match the `--name=`). Orckit then (a) runs `docker rm -f <X>` before every spawn to nuke a container leftover from a previous crashed run, and (b) defaults `stop_command` to `docker rm -f <X>` so Ctrl-C actually tears the container down. Prefer this over `type: bash` + a manual `stop_command` for plain `docker run` — less to keep in sync. Stay on `type: bash` for `docker compose up` (use `stop_command: docker compose down`) or anything where you don't have a single container_name.
+- `type: docker` — the process **is** a `docker run --name <X> ...`. Requires `container_name: <X>` (must match the `--name=`). Orckit runs `docker rm -f <X>` both (a) before every spawn, to nuke a container leftover from a previous crashed run, and (b) after the process is stopped or killed, so the daemon-owned container doesn't outlive orckit and keep its ports bound. On shutdown the `docker run` CLI gets a normal SIGTERM (Docker forwards it to the container) and the post-stop `docker rm -f` guarantees removal even on force-kill. Prefer this over `type: bash` + a manual `stop_command` for plain `docker run` — less to keep in sync. Stay on `type: bash` for `docker compose up` (use `stop_command: docker compose down`) or anything where you don't have a single container_name.
 
 Do not pick `webpack`/`angular` just because the project uses webpack/angular somewhere. Pick it based on what the *command in this process* prints.
 
@@ -147,9 +147,29 @@ The flow on Ctrl-C: orckit runs `docker stop app-db` → dockerd sends SIGTERM t
 
 Use it whenever you see `docker run`, `docker compose up`, `kubectl port-forward`, `ngrok http`, or any other foreground CLI that proxies a daemon-managed resource. Pair `docker run` with `--name=<n>` so the stop command has a stable handle. For `docker compose up`, the natural pairing is `stop_command: docker compose down`.
 
-**Prefer `type: docker`** for the plain `docker run --name X ...` case — it auto-derives `stop_command: docker rm -f X` AND runs the same `docker rm -f X` before every spawn to clear orphans from a previous crash. Only fall back to manual `stop_command` for shapes the docker type can't express (compose, multi-container, no stable container name).
+**Prefer `type: docker`** for the plain `docker run --name X ...` case — it `docker rm -f X`s the container both before every spawn (clears orphans from a previous crash) and after stop (frees its ports), with no `stop_command` to keep in sync. Only fall back to manual `stop_command` for shapes the docker type can't express (compose, multi-container, no stable container name).
 
 Don't set it on plain processes (node, python, etc.) — SIGTERM is correct there and `stop_command` would just be extra config to keep in sync.
+
+## `kill_orphan_ports` — reclaim ports from escaped children
+
+Orckit's normal teardown signals the **whole process group**, which reaps almost everything — including grandchildren that reparented to init. The one shape it can't reach is a child that escapes into its *own* session/group (`setsid`) AND detaches: it survives the group/tree kill and keeps its port bound for the next boot. The classic offender is the **JVM-based Firebase emulator suite** (firestore, auth, database, pub/sub), where the Java processes routinely outlive the `firebase emulators:start` CLI.
+
+For those, list the bound ports and opt in:
+
+```yaml
+emulators:
+  command: firebase emulators:start
+  ports: [8080, 9099, 9000, 4000]
+  kill_orphan_ports: true
+```
+
+After the normal stop path completes, orckit checks each port and force-kills whatever still holds it (via `lsof`). Caveats to flag when suggesting it:
+- **POSIX-only** — needs `lsof`; it's a silent no-op on platforms without it (Windows).
+- **Resource-based, not tree-based** — it kills *whatever* owns the port, including an unrelated process you started by hand. Only enable it for ports the process genuinely owns.
+- A `tcp` ready-check port is swept automatically — don't repeat it in `ports`.
+
+Don't reach for this by default. Plain `node`/`python`/`docker` processes come down cleanly with SIGTERM (and `type: docker` already frees its ports via `docker rm -f`). It's specifically for fork-heavy, port-holding tools that leak.
 
 ## `output` filters
 
@@ -177,6 +197,19 @@ logs:
 Each process gets its own file. Sessions within a file are separated by a banner on every spawn (initial start, auto-restart, manual retry), so restart history is preserved. `output.suppress` / `include` still apply — log files contain exactly what the CLI reporter would show with `--show-output`. Suggest the user add `.orckit/` to `.gitignore` when enabling.
 
 Do **not** enable it just because you can — for short-lived dev sessions, the in-memory `buffer_size` is usually enough and avoids leftover files. Enable when sessions are long, processes are flaky, or the user has asked for persistent logs.
+
+## `ide` (top-level, optional)
+
+On by default; you rarely need to touch it. When a `.idea` folder exists at or above the config, the web dashboard turns file references in logs/errors (`src/app.ts:42:10`) into clickable `jetbrains://` deep links that open the file at the line in the user's JetBrains IDE. No `.idea` → no links; it never affects orchestration or the terminal UI.
+
+```yaml
+ide:
+  tool: webstorm   # default; a `.idea` folder can't tell JetBrains IDEs apart.
+                   # Set when the user's IDE isn't WebStorm: intellij, pycharm,
+                   # phpstorm, goland, rubymine, clion, rider, rustrover, datagrip.
+```
+
+Only add this block to **change the target IDE** (`tool:`), override the IDE project name (`project:`), or disable the links (`enabled: false`). Leaving it out gives WebStorm links when a `.idea` folder is present, which is the right default for JS/TS projects.
 
 ## Environment and secrets
 

@@ -46,6 +46,10 @@ src/
     cli-reporter.ts   # Preflight banner, failure-tail dump, optional
                       # --show-output / --show-build streams. Rides above the
                       # dashboard via its printAbove sink.
+    shutdown-reporter.ts # Verbose teardown log, attached by the CLI for the
+                      # duration of a shutdown (replaces the live reporter):
+                      # per-process stopping/stopped/timeout status + piped
+                      # process & hook output, indented and name-tagged.
     graph-view.ts     # Pure renderGraph(graph, opts) — wave-grouped tree used
                       # by `orc validate` AND the dashboard.
     brand.ts          # ANSI brand mark (mirrors the SVG bars in web-ui),
@@ -68,10 +72,16 @@ src/
     events.ts         # streamOrckitEvents — pushes Orckit events over SSE
     snapshot.ts       # buildSnapshot — serializable view of Orckit state
     static.ts         # serveStaticAsset + resolveStaticDir for the SPA shell
+    ide.ts            # detectIde — finds a .idea folder at/above the config and
+                      # resolves a JetBrains Toolbox toolTag + project name into
+                      # an IdeLink (in the snapshot) so the web UI can deep-link
+                      # file references via the jetbrains:// URL scheme
 
   util/
     env.ts            # mergeEnv (process.env + extras)
     port.ts           # isPortFree
+    line-stream.ts    # bindLineStream — shared line-buffered stream reader
+                      # (Runner output + streamed hook output)
 
 packages/
   web-ui/             # @orckit/web-ui workspace — SolidJS + Vite + Tailwind v4
@@ -158,6 +168,8 @@ Anything that needs a richer view than `inspect(name)` / `states()` / `output(na
 - **`GET /api/state` + `GET /api/output/:name`** — initial-hydration snapshots over JSON
 - **`GET /events`** — SSE stream of orckit events, beginning with a full snapshot for reconnect tolerance
 - **`POST /api/restart/:name` + `POST /api/stop/:name`** — action endpoints calling `orckit.restart()` / `orckit.stop()` directly
+
+The snapshot also carries an `ide: IdeLink | null` field. The CLI resolves it once at start (`detectIde` over the config's directory, gated on the `ide:` config block) and passes it to `attachWebUi`; the server echoes it into every snapshot. The frontend's `lib/ide.ts` turns file references in output (`src/app.ts:42:10`, `foo.ts(12,3)`, stack-trace frames) into `jetbrains://` deep links, rendered by the `LinkedText` component used in the log view and the Errors panel. Relative refs are resolved against the emitting process's working directory (each `ProcessSnapshot.cwd`, the absolute dir the Runner spawned it in) before being made relative to the IDE project root — a process with `cwd: packages/api` that logs `src/x.ts` links to `packages/api/src/x.ts`. Absolute refs are relativized against `ide.root` directly. No `.idea` → `ide` is null → `LinkedText` renders plain text. Path parsing is a pure function with no test harness on the frontend side; the `/sink` page's "IDE deep links" fixture is the visual regression surface — keep it in sync.
 
 The frontend lives in **`packages/web-ui/`** (a pnpm workspace, `@orckit/web-ui`, private, not published). It's SolidJS + Vite + Tailwind v4. Build it with `pnpm build:web` from the root; the static assets get copied into the cli package's tarball so end users get one `npm i @orckit/cli` without needing to run two build systems.
 
