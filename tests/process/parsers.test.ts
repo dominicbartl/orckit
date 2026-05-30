@@ -3,6 +3,7 @@ import {
   getParser,
   parseAngularLine,
   parseWebpackLine,
+  reduceBuild,
   stripAnsi,
 } from '../../src/process/parsers.js';
 
@@ -50,6 +51,13 @@ describe('parseWebpackLine', () => {
     });
   });
 
+  it('captures an "ERROR in" line as the failure reason', () => {
+    expect(parseWebpackLine('ERROR in ./src/app.ts 12:4 - Type error')).toEqual({
+      type: 'build:failed',
+      reason: 'ERROR in ./src/app.ts 12:4 - Type error',
+    });
+  });
+
   it('ignores unrelated lines', () => {
     expect(parseWebpackLine('some random output')).toBeNull();
   });
@@ -79,10 +87,19 @@ describe('parseAngularLine', () => {
     expect(parseAngularLine('✔ Building...')?.type).toBe('build:start');
   });
 
+  it('treats the watch-mode "Rebuilding..." spinner lines as build:start', () => {
+    // On a file-change rebuild the dev-server prints "Changes detected.
+    // Rebuilding..." — the "Re" prefix means a bare \bBuilding\b never matches,
+    // so without explicit handling a successful edit emits no build:start and
+    // the row never flashes "building" again.
+    expect(parseAngularLine('❯ Changes detected. Rebuilding...')?.type).toBe('build:start');
+    expect(parseAngularLine('✔ Changes detected. Rebuilding...')?.type).toBe('build:start');
+  });
+
   it('detects esbuild bundle-complete with a seconds duration', () => {
-    expect(parseAngularLine('Application bundle generation complete. [1.197 seconds]')?.type).toBe(
-      'build:complete',
-    );
+    expect(
+      parseAngularLine('Application bundle generation complete. [1.197 seconds]'),
+    ).toMatchObject({ type: 'build:complete', durationMs: 1197 });
   });
 
   it('detects esbuild bundle-generation failure', () => {
@@ -90,6 +107,36 @@ describe('parseAngularLine', () => {
       'build:failed',
     );
     expect(parseAngularLine('✘ [ERROR] Unexpected token')?.type).toBe('build:failed');
+  });
+
+  it('captures the esbuild diagnostic line as the failure reason', () => {
+    expect(parseAngularLine('✘ [ERROR] TS2322: Type mismatch [plugin angular-compiler]')).toEqual({
+      type: 'build:failed',
+      reason: '✘ [ERROR] TS2322: Type mismatch [plugin angular-compiler]',
+    });
+  });
+
+  it('detects tsc-style diagnostics the dev-server forwards (mixed/lowercase)', () => {
+    // The Angular/TS compiler prints "Error: src/foo.ts:1:1 - error TS2300: ..."
+    // (lowercase "error TS"), which a bare uppercase \bERROR\b would miss — so
+    // the build would silently appear to never fail.
+    const line =
+      "Error: apps/widget/src/app/app.component.ts:25:7 - error TS2300: Duplicate identifier '(Missing)'.";
+    expect(parseAngularLine(line)).toEqual({ type: 'build:failed', reason: line });
+  });
+
+  it('ignores code-frame continuation lines (no diagnostic code)', () => {
+    expect(parseAngularLine('  apps/widget/src/app/app.component.ts:25:49')).toBeNull();
+    expect(
+      parseAngularLine('    25   this.localizationService.currentLanguage$.pipe(...)'),
+    ).toBeNull();
+  });
+
+  it('does not attach a reason to the bundle-generation-failed summary line', () => {
+    // The summary only flips the phase; the detail lives in the diagnostics.
+    expect(parseAngularLine('Application bundle generation failed. [0.523 seconds]')).toEqual({
+      type: 'build:failed',
+    });
   });
 
   it('extracts build time when present', () => {
@@ -110,5 +157,43 @@ describe('getParser', () => {
 
   it('returns null for bash', () => {
     expect(getParser('bash')).toBeNull();
+  });
+});
+
+describe('reduceBuild', () => {
+  it('maps build:start to building', () => {
+    expect(reduceBuild({ type: 'build:start' })).toEqual({ phase: 'building' });
+  });
+
+  it('carries progress percent', () => {
+    expect(reduceBuild({ type: 'build:progress', percent: 42 })).toEqual({
+      phase: 'building',
+      percent: 42,
+    });
+  });
+
+  it('surfaces a failed compile from build:complete', () => {
+    expect(
+      reduceBuild({ type: 'build:complete', success: false, errors: 21, warnings: 0 }),
+    ).toEqual({ phase: 'done', success: false, errors: 21, warnings: 0, durationMs: undefined });
+  });
+
+  it('keeps duration on a successful build', () => {
+    expect(
+      reduceBuild({
+        type: 'build:complete',
+        success: true,
+        errors: 0,
+        warnings: 2,
+        durationMs: 1840,
+      }),
+    ).toEqual({ phase: 'done', success: true, errors: 0, warnings: 2, durationMs: 1840 });
+  });
+
+  it('maps build:failed', () => {
+    expect(reduceBuild({ type: 'build:failed', reason: 'Failed to compile' })).toEqual({
+      phase: 'failed',
+      reason: 'Failed to compile',
+    });
   });
 });
