@@ -175,6 +175,21 @@ export function attachDashboard(
     );
     redraw();
   };
+  const onStopping = (name: string) => {
+    // Drop the stale ready-duration annotation so the row reads as "stopping",
+    // not "ready (120ms)" with a stop spinner next to it.
+    annotations.delete(name);
+    redraw();
+  };
+  const onKilled = (name: string, signal: NodeJS.Signals) => {
+    if (signal !== 'SIGKILL') return;
+    annotations.set(name, chalk.yellow('force killing'));
+    redraw();
+  };
+  const onStopped = (name: string, durationMs?: number) => {
+    annotations.set(name, chalk.dim(durationMs != null ? `(${formatDuration(durationMs)})` : ''));
+    redraw();
+  };
   const onRestarting = (name: string, attempt: number) => {
     annotations.set(name, chalk.yellow(`(retry ${attempt})`));
     startedAt.set(name, Date.now());
@@ -209,6 +224,9 @@ export function attachDashboard(
   orckit.on('process:starting', onStarting);
   orckit.on('process:ready', onReady);
   orckit.on('process:finished', onFinished);
+  orckit.on('process:stopping', onStopping);
+  orckit.on('process:killed', onKilled);
+  orckit.on('process:stopped', onStopped);
   orckit.on('process:failed', onFailed);
   orckit.on('process:restarting', onRestarting);
   orckit.on('process:build', onBuild);
@@ -249,6 +267,9 @@ export function attachDashboard(
       orckit.off('process:starting', onStarting);
       orckit.off('process:ready', onReady);
       orckit.off('process:finished', onFinished);
+      orckit.off('process:stopping', onStopping);
+      orckit.off('process:killed', onKilled);
+      orckit.off('process:stopped', onStopped);
       orckit.off('process:failed', onFailed);
       orckit.off('process:restarting', onRestarting);
       orckit.off('process:build', onBuild);

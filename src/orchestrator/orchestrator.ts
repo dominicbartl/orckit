@@ -13,7 +13,7 @@ import { HealthTimeoutError, waitForReady } from '../health/wait.js';
 import { Runner } from '../process/runner.js';
 import { OutputBuffer, type OutputLine } from '../process/output.js';
 import { getParser, type BuildEvent, type LineParser } from '../process/parsers.js';
-import { isPortFree } from '../util/port.js';
+import { isPortFree, killPortHolders } from '../util/port.js';
 import {
   isActive,
   isReadyOrDone,
@@ -22,7 +22,7 @@ import {
   type ProcessState,
 } from './lifecycle.js';
 import { runHook, type HookKind } from './hooks.js';
-import { applyDockerDefaults, runDockerOrphanCleanup } from './docker.js';
+import { removeDockerContainer } from './docker.js';
 import { PreflightError, runPreflight, type PreflightResult } from './preflight.js';
 
 export interface BootSummary {
@@ -63,12 +63,16 @@ export type OrckitEvents = {
   'process:ready': [name: string, durationMs: number];
   'process:running': [name: string];
   'process:finished': [name: string, durationMs: number];
-  'process:stopped': [name: string];
+  'process:stopping': [name: string];
+  'process:killed': [name: string, signal: NodeJS.Signals];
+  'process:port-freed': [name: string, port: number, pid: number];
+  'process:stopped': [name: string, durationMs?: number];
   'process:failed': [name: string, error?: Error];
   'process:restarting': [name: string, attempt: number];
   'process:line': [name: string, line: OutputLine];
   'process:build': [name: string, event: BuildEvent];
   'hook:start': [name: string, hook: HookKind];
+  'hook:line': [name: string, hook: HookKind, text: string, stream: 'stdout' | 'stderr'];
   'hook:complete': [name: string, hook: HookKind];
   'hook:failed': [name: string, hook: HookKind, error: Error];
   'boot:complete': [summary: BootSummary];
@@ -86,6 +90,7 @@ interface Handle {
   shutdown: AbortController | null;
   restartAbort: AbortController | null;
   startedAt: number | null;
+  stoppingAt: number | null;
 }
 
 export interface RestartOptions {
@@ -173,10 +178,15 @@ export class Orckit extends EventEmitter<OrckitEvents> {
 
     const order = resolveStartOrder(this.graph);
     const toStop = targets && targets.length > 0 ? new Set(targets) : new Set(order);
-    const reversed = [...order].reverse().filter((n) => toStop.has(n));
-    for (const name of reversed) {
-      await this.stopOne(name);
-    }
+    // Tear processes down in parallel. Each stopOne() waits up to the per-process
+    // grace window (10s) for a clean exit before escalating to SIGKILL; doing
+    // them sequentially would sum those windows — with a dozen processes that's
+    // a minute-plus of apparent hang on Ctrl-C. A hard shutdown doesn't need the
+    // reverse-dependency ordering a rolling `restart()` does: every process is
+    // going away, so signal them all at once (this also matches how the terminal
+    // used to broadcast SIGINT to the whole process group simultaneously).
+    const stopping = [...order].filter((n) => toStop.has(n)).map((n) => this.stopOne(n));
+    await Promise.all(stopping);
     this.stopping = false;
   }
 
@@ -359,7 +369,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // For `type: docker`, nuke any container left over from a previous run
     // before pre_start. Failures are swallowed inside the helper — the upcoming
     // `docker run` will surface the real error if docker itself is broken.
-    await runDockerOrphanCleanup(handle.config);
+    await removeDockerContainer(handle.config);
 
     // A failing pre_start hook runs BEFORE the process transitions out of
     // `pending`, so without this it would throw and leave the process stuck in
@@ -401,6 +411,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     handle.startedAt = Date.now();
 
     runner.on('line', (text, stream) => this.handleLine(name, text, stream));
+    runner.on('kill', (signal) => this.emit('process:killed', name, signal));
+    runner.on('port_freed', (port, pid) => this.emit('process:port-freed', name, port, pid));
     runner.once('error', (err) => this.emit('process:failed', name, err));
 
     const ready = handle.config.ready;
@@ -489,12 +501,38 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     await this.runHookSafe(name, 'pre_stop');
 
     this.applyEvent(name, { kind: 'stop-requested' });
+    handle.stoppingAt = Date.now();
+    this.emit('process:stopping', name);
     handle.shutdown?.abort();
     if (handle.runner?.running) {
       await handle.runner.stop();
     }
     // exit handler fires applyEvent('exited', expected=true)
+    // For `type: docker`, the local `docker run` CLI we just signalled doesn't
+    // own the container — force-remove it so its published ports are freed for
+    // the next boot, regardless of whether the process stopped gracefully or
+    // was SIGKILLed. No-op for every other process type.
+    await removeDockerContainer(handle.config);
     await this.runHookSafe(name, 'post_stop');
+    await this.sweepOrphanPorts(name);
+  }
+
+  /**
+   * Post-stop backstop for `kill_orphan_ports`: once the normal teardown has run
+   * (SIGTERM → grace → SIGKILL of the whole tree, docker cleanup, post_stop),
+   * force-kill anything still bound to one of this process's declared `ports`
+   * (plus its tcp ready-check port). This is what reaps children that escaped the
+   * process group and kept a port held — classically the JVM Firebase emulators.
+   * No-op unless the process opted in. Emits `process:port-freed` per reaped pid.
+   */
+  private async sweepOrphanPorts(name: string): Promise<void> {
+    const handle = this.handles.get(name);
+    if (!handle?.config.kill_orphan_ports) return;
+    const ports = new Set(handle.config.ports);
+    if (handle.config.ready?.type === 'tcp') ports.add(handle.config.ready.port);
+    if (ports.size === 0) return;
+    const freed = await killPortHolders([...ports]);
+    for (const { port, pid } of freed) this.emit('process:port-freed', name, port, pid);
   }
 
   private handleLine(name: string, text: string, stream: 'stdout' | 'stderr'): void {
@@ -519,7 +557,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     handle.probe = null;
     this.applyEvent(name, { kind: 'exited', expected, code });
     if (handle.state === 'stopped') {
-      this.emit('process:stopped', name);
+      const stopMs = handle.stoppingAt != null ? Date.now() - handle.stoppingAt : undefined;
+      handle.stoppingAt = null;
+      this.emit('process:stopped', name, stopMs);
       // A clean exit we didn't request still warrants a restart under `restart: always`.
       if (!expected) void this.maybeRestart(name);
       return;
@@ -568,6 +608,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
         cwd: handle.config.cwd,
         env: handle.config.env,
         timeoutMs: handle.config.hook_timeout_ms,
+        onLine: (text, stream) => this.emit('hook:line', name, hook, text, stream),
       });
       this.emit('hook:complete', name, hook);
     } catch (err) {
@@ -585,8 +626,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.emit('process:state', name, next);
   }
 
-  private makeHandle(rawConfig: ProcessConfig): Handle {
-    const config = applyDockerDefaults(rawConfig);
+  private makeHandle(config: ProcessConfig): Handle {
     return {
       state: 'pending',
       config,
@@ -598,6 +638,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       shutdown: null,
       restartAbort: null,
       startedAt: null,
+      stoppingAt: null,
     };
   }
 

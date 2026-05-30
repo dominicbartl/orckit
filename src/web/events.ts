@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import type { Orckit, OrckitEvents } from '../orchestrator/orchestrator.js';
+import { reduceBuild } from '../process/parsers.js';
 
 /**
  * Push every relevant orckit event to a single SSE client. Returns a
@@ -42,7 +43,10 @@ export function streamOrckitEvents(orckit: Orckit, res: ServerResponse): () => v
   on('process:ready', (name, durationMs) => send('ready', { name, durationMs }));
   on('process:running', (name) => send('running', { name }));
   on('process:finished', (name, durationMs) => send('finished', { name, durationMs }));
-  on('process:stopped', (name) => send('stopped', { name }));
+  on('process:stopping', (name) => send('stopping', { name }));
+  on('process:killed', (name, signal) => send('killed', { name, signal }));
+  on('process:port-freed', (name, port, pid) => send('port-freed', { name, port, pid }));
+  on('process:stopped', (name, durationMs) => send('stopped', { name, durationMs }));
   on('process:failed', (name, error) => send('failed', { name, error: error?.message }));
   on('process:restarting', (name, attempt) => send('restarting', { name, attempt }));
   on('process:line', (name, line) =>
@@ -54,6 +58,10 @@ export function streamOrckitEvents(orckit: Orckit, res: ServerResponse): () => v
       highlight: line.highlight,
     }),
   );
+  // Send the reduced build *status* (current state) rather than the raw
+  // momentary event — the client pins it next to the process, so it wants
+  // "where the build stands" not "what just happened".
+  on('process:build', (name, event) => send('build', { name, build: reduceBuild(event) }));
   on('boot:complete', (summary) => send('boot:complete', summary));
   on('all:ready', (names) => send('all:ready', { names }));
 
