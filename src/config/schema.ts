@@ -80,22 +80,25 @@ export const processConfigSchema = z
     /**
      * Shell command run during shutdown *instead of* SIGTERM. Use it for CLI
      * clients that manage external resources their own process doesn't directly
-     * own — e.g. `docker run`, where killing the local CLI doesn't necessarily
-     * stop the container. orckit fires the command, then waits the normal grace
-     * period for the main process to exit; if it's still alive at the end of
-     * the grace window it gets SIGKILLed as a last resort. Falls back to plain
-     * SIGTERM when unset.
+     * own — e.g. `docker compose up`, where killing the local CLI doesn't
+     * necessarily stop the stack. orckit fires the command, then waits the
+     * normal grace period for the main process to exit; if it's still alive at
+     * the end of the grace window it gets SIGKILLed as a last resort. Falls back
+     * to plain SIGTERM when unset.
      *
-     * For `type: docker`, this defaults to `docker rm -f <container_name>` when
-     * not set explicitly.
+     * `type: docker` does NOT need this — it stops the `docker run` CLI with a
+     * normal SIGTERM (forwarded to the container) and then force-removes the
+     * container by `container_name`. Set it only for shapes the docker type
+     * can't express, like `docker compose down`.
      */
     stop_command: z.string().optional(),
     /**
-     * Required when `type: docker`; the container handle orckit uses to clean
-     * up orphans before spawn (a `docker rm -f` is run before `pre_start`) and
-     * to tear the container down on shutdown (used as the default
-     * `stop_command`). Must match the `--name=<...>` flag in the docker command.
-     * Rejected for non-docker process types.
+     * Required when `type: docker`; the container handle orckit uses to remove
+     * the container both *before* every spawn (clearing an orphan from a
+     * previous crashed run) and *after* the process is stopped or killed (so the
+     * daemon-owned container can't outlive orckit and keep its ports bound).
+     * Must match the `--name=<...>` flag in the docker command. Rejected for
+     * non-docker process types.
      */
     container_name: z
       .string()
@@ -143,6 +146,24 @@ export const processConfigSchema = z
      * defeating the purpose.
      */
     optional: z.boolean().default(false),
+    /**
+     * Ports this process is expected to bind. Only consumed by
+     * `kill_orphan_ports` as the sweep target — declaring ports here without
+     * that flag has no effect. The `tcp` ready-check port (if any) is always
+     * included in the sweep automatically, so it doesn't need to be repeated.
+     */
+    ports: z.array(z.number().int().min(1).max(65_535)).default([]),
+    /**
+     * Resource-based teardown backstop. After the normal stop path (SIGTERM →
+     * grace → SIGKILL of the whole process group/tree) completes, orckit checks
+     * whether any of this process's `ports` is still bound and force-kills
+     * whatever still holds it. Use it for tools whose children escape the
+     * process group and keep a port bound after the tree is gone — classically
+     * the JVM-based Firebase emulators. Opt-in and POSIX-only (needs `lsof`):
+     * killing by port hits *whatever* owns the port, so only enable it for
+     * ports you know are yours. Default false.
+     */
+    kill_orphan_ports: z.boolean().default(false),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'docker' && !data.container_name) {
@@ -201,6 +222,39 @@ const webConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
 });
 
+/**
+ * Friendly names for the JetBrains IDE to deep-link into. A `.idea` folder is
+ * shared across every JetBrains IDE and can't tell them apart, so this picks
+ * which one the web UI's file links open. Defaults to WebStorm — orckit's
+ * primary audience is JS/TS devs.
+ */
+const ideToolSchema = z.enum([
+  'webstorm',
+  'intellij',
+  'pycharm',
+  'phpstorm',
+  'goland',
+  'rubymine',
+  'clion',
+  'rider',
+  'rustrover',
+  'datagrip',
+]);
+
+const ideConfigSchema = z.object({
+  /**
+   * When true, `orc start` looks for a `.idea` folder at/above the config and,
+   * if found, makes file references in the web dashboard's logs and errors
+   * clickable — they open the file at the line in your running JetBrains IDE
+   * via the Toolbox `jetbrains://` URL scheme. No `.idea` → no links.
+   */
+  enabled: z.boolean().default(true),
+  /** Which JetBrains IDE the links target (`.idea` can't disambiguate). */
+  tool: ideToolSchema.default('webstorm'),
+  /** Override the IDE project name (otherwise derived from `.idea`/folder). */
+  project: z.string().optional(),
+});
+
 export const orckitConfigSchema = z
   .object({
     project: z.string().default('orckit'),
@@ -211,6 +265,7 @@ export const orckitConfigSchema = z
     logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
     mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
     web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
+    ide: ideConfigSchema.default({ enabled: true, tool: 'webstorm' }),
   })
   .superRefine((data, ctx) => {
     // A required process can't depend on an optional one — if `optional: true`
@@ -247,3 +302,5 @@ export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type WebConfig = z.infer<typeof webConfigSchema>;
+export type IdeConfig = z.infer<typeof ideConfigSchema>;
+export type IdeTool = z.infer<typeof ideToolSchema>;

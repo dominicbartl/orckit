@@ -40,6 +40,26 @@ describe('processConfigSchema', () => {
     expect(processConfigSchema.parse({ command: 'x', optional: true }).optional).toBe(true);
   });
 
+  it('ports defaults to [] and kill_orphan_ports to false', () => {
+    const parsed = processConfigSchema.parse({ command: 'x' });
+    expect(parsed.ports).toEqual([]);
+    expect(parsed.kill_orphan_ports).toBe(false);
+  });
+
+  it('accepts ports + kill_orphan_ports', () => {
+    const parsed = processConfigSchema.parse({
+      command: 'x',
+      ports: [8080, 9099],
+      kill_orphan_ports: true,
+    });
+    expect(parsed.ports).toEqual([8080, 9099]);
+    expect(parsed.kill_orphan_ports).toBe(true);
+  });
+
+  it('rejects an out-of-range port', () => {
+    expect(() => processConfigSchema.parse({ command: 'x', ports: [70_000] })).toThrow();
+  });
+
   it('stop_command is optional and defaults to undefined', () => {
     const parsed = processConfigSchema.parse({ command: 'echo hi' });
     expect(parsed.stop_command).toBeUndefined();
@@ -84,8 +104,8 @@ describe('processConfigSchema', () => {
       });
       expect(parsed.type).toBe('docker');
       expect(parsed.container_name).toBe('foo');
-      // schema does NOT auto-fill stop_command — that's an orchestrator
-      // concern (applyDockerDefaults). The schema only validates.
+      // schema does NOT touch stop_command for docker — container teardown is
+      // an orchestrator concern (removeDockerContainer). The schema only validates.
       expect(parsed.stop_command).toBeUndefined();
     });
 
@@ -268,6 +288,37 @@ describe('orckitConfigSchema', () => {
       },
     });
     expect(parsed.processes.admin?.optional).toBe(true);
+  });
+
+  it('applies ide defaults when block is omitted', () => {
+    const parsed = orckitConfigSchema.parse({ processes: { a: { command: 'echo' } } });
+    expect(parsed.ide).toEqual({ enabled: true, tool: 'webstorm' });
+  });
+
+  it('ide.tool override keeps enabled default', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      ide: { tool: 'pycharm' },
+    });
+    expect(parsed.ide).toEqual({ enabled: true, tool: 'pycharm' });
+  });
+
+  it('honors ide.enabled: false and ide.project override', () => {
+    const parsed = orckitConfigSchema.parse({
+      processes: { a: { command: 'echo' } },
+      ide: { enabled: false, project: 'my-proj' },
+    });
+    expect(parsed.ide.enabled).toBe(false);
+    expect(parsed.ide.project).toBe('my-proj');
+  });
+
+  it('rejects an unknown ide.tool', () => {
+    expect(() =>
+      orckitConfigSchema.parse({
+        processes: { a: { command: 'echo' } },
+        ide: { tool: 'sublime' },
+      }),
+    ).toThrow();
   });
 
   it('accepts a complete configuration', () => {
