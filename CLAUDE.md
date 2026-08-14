@@ -31,6 +31,10 @@ src/
   process/
     runner.ts         # Single Runner class; subprocess + line-buffered I/O
     parsers.ts        # Pure (line) => BuildEvent | null parsers
+    build-tracker.ts  # trackBuilds(orckit) — subscribes to process:build and
+                      # reduces the event stream into per-process BuildStatus +
+                      # diagnostics. Shared by the web AND mcp servers so they
+                      # never drift on build-outcome accumulation.
     output.ts         # OutputBuffer with suppress/include/highlight filters
 
   orchestrator/
@@ -63,8 +67,10 @@ src/
   mcp/
     server.ts         # attachMcpServer — Streamable HTTP MCP listener that
                       # exposes the running Orckit instance to MCP clients
-    tools.ts          # Pure handlers for the three read-only tools
-                      # (get_status / get_errors / get_logs)
+    tools.ts          # Pure handlers for the read-only tools (get_status /
+                      # get_errors / get_logs / get_build_status /
+                      # wait_for_build). wait_for_build long-polls process:build
+                      # until the build settles (quiet-period debounce).
 
   web/
     server.ts         # attachWebUi — HTTP listener for the browser dashboard
@@ -151,10 +157,10 @@ Snapshot exposes `optional: boolean` so the web UI can render a ▶ start button
 
 ## MCP server: how Claude Code queries a running orckit
 
-`src/mcp/` is a reporter-style consumer of Orckit: `attachMcpServer(orckit, opts)` follows the same shape as `attachLogReporter` — it subscribes to events (for last-error tracking), exposes a few synchronous queries from the Orckit instance, and returns a handle with `dispose()`. It runs **inside the `orc start` process** over Streamable HTTP on `127.0.0.1:7676` (configurable via the `mcp:` YAML block or `--mcp-port` / `--no-mcp`). There is no separate `orc mcp` subcommand and no IPC layer.
+`src/mcp/` is a reporter-style consumer of Orckit: `attachMcpServer(orckit, opts)` follows the same shape as `attachLogReporter` — it subscribes to events (last-error tracking + a shared `trackBuilds` for build state), exposes mostly synchronous queries from the Orckit instance, and returns a handle with `dispose()`. It runs **inside the `orc start` process** over Streamable HTTP on `127.0.0.1:7676` (configurable via the `mcp:` YAML block or `--mcp-port` / `--no-mcp`). There is no separate `orc mcp` subcommand and no IPC layer.
 
 Three layers:
-1. **`mcp/tools.ts`** — pure handlers that take an `OrckitView` (a structural subset of `Orckit`) and produce text + JSON. Trivial to unit-test against a stub.
+1. **`mcp/tools.ts`** — pure handlers that take an `OrckitView` (a structural subset of `Orckit`) and produce text + JSON. Trivial to unit-test against a stub. The one non-synchronous tool is `wait_for_build`, which long-polls the `process:build` stream (via a `BuildEventSource`) until the build settles, with a quiet-period debounce so a stream of `build:failed` diagnostics collects fully before resolving.
 2. **`mcp/server.ts`** — the HTTP server. In stateless Streamable HTTP mode the SDK requires a fresh `StreamableHTTPServerTransport` + `McpServer` per request (see the SDK's `simpleStatelessStreamableHttp` example); `attachMcpServer` does this in its request handler.
 3. **`cli.ts start`** — resolves effective settings (CLI flag > YAML > schema default), calls `attachMcpServer`, prints the URL and a `claude mcp add` hint.
 

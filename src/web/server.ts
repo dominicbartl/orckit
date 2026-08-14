@@ -5,7 +5,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { Orckit } from '../orchestrator/orchestrator.js';
-import { reduceBuild, type BuildEvent, type BuildStatus } from '../process/parsers.js';
+import { trackBuilds } from '../process/build-tracker.js';
 import { buildSnapshot, recentOutput } from './snapshot.js';
 import { streamOrckitEvents } from './events.js';
 import { resolveStaticDir, serveStaticAsset } from './static.js';
@@ -69,32 +69,9 @@ export async function attachWebUi(
   // Track the latest build status per process so reconnecting clients (and the
   // initial snapshot) see the current build state, not just live deltas. SSE
   // listeners, like the dashboard reporter, only observe *new* build events.
-  const builds = new Map<string, BuildStatus>();
-  // The diagnostic lines from the latest failing build, accumulated across the
-  // stream of build:failed events (each carries one error) so the snapshot and
-  // the Errors panel can list them. A build:start (rebuild) or a successful
-  // completion clears the list.
-  const buildErrors = new Map<string, string[]>();
-  const MAX_BUILD_ERRORS = 50;
-  const onBuild = (name: string, event: BuildEvent) => {
-    builds.set(name, reduceBuild(event));
-    if (event.type === 'build:start') {
-      buildErrors.delete(name);
-    } else if (event.type === 'build:complete' && event.success) {
-      buildErrors.delete(name);
-    } else if (event.type === 'build:failed' && event.reason) {
-      const list = buildErrors.get(name) ?? [];
-      if (list.length < MAX_BUILD_ERRORS) list.push(event.reason);
-      buildErrors.set(name, list);
-    }
-  };
-  const onRestarting = (name: string) => {
-    // A fresh boot of the process supersedes its prior build outcome.
-    builds.delete(name);
-    buildErrors.delete(name);
-  };
-  orckit.on('process:build', onBuild);
-  orckit.on('process:restarting', onRestarting);
+  // The shared tracker owns the event-stream → status reduction so the web and
+  // MCP servers never drift on it.
+  const { builds, buildErrors, dispose: disposeTracker } = trackBuilds(orckit);
 
   const activeEventStreams = new Set<ServerResponse>();
 
@@ -241,8 +218,7 @@ export async function attachWebUi(
     async dispose() {
       orckit.off('process:failed', onFailed);
       orckit.off('process:ready', onReady);
-      orckit.off('process:build', onBuild);
-      orckit.off('process:restarting', onRestarting);
+      disposeTracker();
       for (const stream of activeEventStreams) {
         try {
           stream.end();

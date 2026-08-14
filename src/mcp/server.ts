@@ -7,6 +7,7 @@ import {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Orckit } from '../orchestrator/orchestrator.js';
+import { trackBuilds } from '../process/build-tracker.js';
 import { registerTools } from './tools.js';
 
 export interface McpServerOptions {
@@ -29,9 +30,9 @@ export interface McpServerHandle {
 
 /**
  * Attach an in-process MCP server to an Orckit instance. The server exposes
- * three read-only tools (`get_status`, `get_errors`, `get_logs`) over
- * Streamable HTTP and is intended to be hit by Claude Code or any other MCP
- * client.
+ * read-only tools (`get_status`, `get_errors`, `get_logs`, `get_build_status`,
+ * `wait_for_build`) over Streamable HTTP and is intended to be hit by Claude
+ * Code or any other MCP client.
  *
  * Returns a handle whose `dispose()` cleanly closes the HTTP listener and
  * tears down the MCP transport. Throws on `EADDRINUSE` so the caller can
@@ -51,6 +52,10 @@ export async function attachMcpServer(
   };
   orckit.on('process:failed', onFailed);
 
+  // Track build state from the event stream so get_build_status / wait_for_build
+  // can report it (the same tracker the web server uses).
+  const tracker = trackBuilds(orckit);
+
   // Streamable HTTP in stateless mode requires a fresh transport per request —
   // see the SDK's simpleStatelessStreamableHttp example. The McpServer setup
   // is also re-created per request (cheap; just tool registration).
@@ -59,7 +64,7 @@ export async function attachMcpServer(
       { name: 'orckit', version: '0.2.0' },
       { capabilities: { tools: {} } },
     );
-    registerTools(mcp, orckit, lastErrors);
+    registerTools(mcp, orckit, lastErrors, tracker);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close().catch(() => {});
@@ -102,6 +107,7 @@ export async function attachMcpServer(
     port,
     async dispose() {
       orckit.off('process:failed', onFailed);
+      tracker.dispose();
       await new Promise<void>((resolve, reject) => {
         http.close((err) => (err ? reject(err) : resolve()));
         // http.close() only stops accepting new sockets; it waits for existing

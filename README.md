@@ -309,6 +309,10 @@ Run that `claude mcp add` command once. From then on, Claude Code can call:
 | `get_status` | Every process with state, PID, uptime, retry count, and whether it's `manual_retry: true` |
 | `get_errors` | Failed processes only, with last error message + last ~50 lines of stderr per process |
 | `get_logs` | Recent stdout/stderr for a named process (`{name, lines?, stream?}`) |
+| `get_build_status` | Build phase (building/done/failed), error/warning counts, duration, and failure diagnostics per build process (`{name?}` — omit for all) |
+| `wait_for_build` | Blocks until the named process's build settles, then returns success/failure with diagnostics (`{name, timeout_ms?}`) |
+
+`get_build_status` and `wait_for_build` let an agent **defer to orckit's running build instead of spawning its own**: orckit already runs the project's `webpack`/`angular` watch processes, so an agent verifying a change should `wait_for_build` for the result rather than starting a duplicate compile. (Build phase is only tracked for process `type`s with a parser — currently `webpack` and `angular`.)
 
 When `orc start` isn't running, the MCP tools simply fail to connect — Claude reports that orckit isn't running, no further configuration needed.
 

@@ -33,10 +33,16 @@ describe('attachMcpServer over Streamable HTTP', () => {
     await orckit.dispose();
   });
 
-  it('lists exactly the three orckit tools with input schemas', async () => {
+  it('lists exactly the orckit tools with input schemas', async () => {
     const result = await client.listTools();
     const names = result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_errors', 'get_logs', 'get_status']);
+    expect(names).toEqual([
+      'get_build_status',
+      'get_errors',
+      'get_logs',
+      'get_status',
+      'wait_for_build',
+    ]);
 
     const logsTool = result.tools.find((t) => t.name === 'get_logs')!;
     expect(logsTool.inputSchema.properties).toMatchObject({
@@ -45,6 +51,9 @@ describe('attachMcpServer over Streamable HTTP', () => {
       stream: expect.any(Object),
     });
     expect(logsTool.inputSchema.required).toEqual(['name']);
+
+    const waitTool = result.tools.find((t) => t.name === 'wait_for_build')!;
+    expect(waitTool.inputSchema.required).toEqual(['name']);
   });
 
   it('get_status returns the current process states', async () => {
@@ -120,6 +129,47 @@ describe('attachMcpServer over Streamable HTTP', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as { type: string; text: string }[])[0].text;
     expect(text).toMatch(/unknown process/);
+  });
+
+  it('get_build_status reflects a process:build emission', async () => {
+    orckit.emit('process:build', 'api', {
+      type: 'build:complete',
+      success: true,
+      errors: 0,
+      warnings: 0,
+      durationMs: 1200,
+    });
+
+    const result = await client.callTool({
+      name: 'get_build_status',
+      arguments: { name: 'api' },
+    });
+    const json = extractJson(result) as {
+      builds: { name: string; build: { phase: string; success: boolean } }[];
+    };
+    expect(json.builds).toHaveLength(1);
+    expect(json.builds[0].name).toBe('api');
+    expect(json.builds[0].build.phase).toBe('done');
+    expect(json.builds[0].build.success).toBe(true);
+  });
+
+  it('wait_for_build returns immediately when the build is already settled', async () => {
+    orckit.emit('process:build', 'api', { type: 'build:failed', reason: 'TS2322 type error' });
+
+    const result = await client.callTool({
+      name: 'wait_for_build',
+      arguments: { name: 'api' },
+    });
+    const json = extractJson(result) as {
+      name: string;
+      waited: boolean;
+      build: { phase: string };
+      diagnostics: string[];
+    };
+    expect(json.name).toBe('api');
+    expect(json.waited).toBe(false);
+    expect(json.build.phase).toBe('failed');
+    expect(json.diagnostics).toContain('TS2322 type error');
   });
 
   it('rejects an EADDRINUSE bind with a clear message', async () => {

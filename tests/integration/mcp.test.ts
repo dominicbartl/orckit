@@ -112,12 +112,14 @@ describe('orc start + MCP end-to-end', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   }, 15_000);
 
-  it('exposes the three orckit tools via the printed URL', async () => {
+  it('exposes the orckit tools via the printed URL', async () => {
     const result = await client.listTools();
     expect(result.tools.map((t) => t.name).sort()).toEqual([
+      'get_build_status',
       'get_errors',
       'get_logs',
       'get_status',
+      'wait_for_build',
     ]);
   });
 
