@@ -594,10 +594,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
           reject(new Error(`process exited (code ${code ?? '?'}) during health check`)),
         );
       });
-      await Promise.race([
-        waitForReady(probe, { signal: abort.signal }),
-        exitDuringHealth,
-      ]);
+      await Promise.race([waitForReady(probe, { signal: abort.signal }), exitDuringHealth]);
       // The probe may report ready in the same tick a stop lands; never
       // continue a cancelled startup into markReadyAndRunning (it would be an
       // illegal stopping → ready transition and leave the child untracked).
@@ -786,7 +783,11 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     }
   }
 
-  private async runHookSafe(name: string, hook: HookKind, cancelSignal?: AbortSignal): Promise<void> {
+  private async runHookSafe(
+    name: string,
+    hook: HookKind,
+    cancelSignal?: AbortSignal,
+  ): Promise<void> {
     const handle = this.handles.get(name);
     if (!handle?.config.hooks?.[hook]) return;
     this.emit('hook:start', name, hook);

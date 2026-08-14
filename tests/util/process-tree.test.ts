@@ -189,11 +189,10 @@ describe('collectProcessTree', () => {
     const pid = await deadPid();
     const tree = await collectProcessTree(pid);
 
-    // NOTE: the walk echoes the requested root back even when `ps` has no row
-    // for it (the caller signals it anyway, best-effort), so `pids` is [pid]
-    // rather than empty. What matters is that it found no descendants, no
-    // groups to signal, and nothing alive.
-    expect(tree.pids.filter((p) => p !== pid)).toEqual([]);
+    // The walk only yields processes the snapshot actually saw, so an exited
+    // root contributes nothing at all — a caller can never signal a PID on the
+    // strength of a stale reference to it (that PID may since be someone else).
+    expect(tree.pids).toEqual([]);
     expect(tree.pgids).toEqual([]);
     expect(survivors(tree)).toEqual([]);
   });

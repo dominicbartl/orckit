@@ -30,7 +30,7 @@ describe('collectExpectedPorts', () => {
       api: { command: 'x', ready: { type: 'http', url: 'http://127.0.0.1:4000/health' } },
     });
     expect(collectExpectedPorts(config, ['api'])).toEqual([
-      { port: 4000, owner: 'api', source: 'ready-check' },
+      { port: 4000, owner: 'api', source: 'ready-check', required: true },
     ]);
   });
 
@@ -39,7 +39,7 @@ describe('collectExpectedPorts', () => {
       db: { command: 'x', ready: { type: 'tcp', host: 'localhost', port: 5432 } },
     });
     expect(collectExpectedPorts(config, ['db'])).toEqual([
-      { port: 5432, owner: 'db', source: 'ready-check' },
+      { port: 5432, owner: 'db', source: 'ready-check', required: true },
     ]);
   });
 
@@ -65,8 +65,8 @@ describe('collectExpectedPorts', () => {
       emu: { command: 'x', ports: [8080, 9099] },
     });
     expect(collectExpectedPorts(config, ['emu'])).toEqual([
-      { port: 8080, owner: 'emu', source: 'ports' },
-      { port: 9099, owner: 'emu', source: 'ports' },
+      { port: 8080, owner: 'emu', source: 'ports', required: true },
+      { port: 9099, owner: 'emu', source: 'ports', required: true },
     ]);
   });
 
@@ -79,8 +79,8 @@ describe('collectExpectedPorts', () => {
       },
     });
     expect(collectExpectedPorts(config, ['api'])).toEqual([
-      { port: 4000, owner: 'api', source: 'ready-check' },
-      { port: 4001, owner: 'api', source: 'ports' },
+      { port: 4000, owner: 'api', source: 'ready-check', required: true },
+      { port: 4001, owner: 'api', source: 'ports', required: true },
     ]);
   });
 
@@ -90,7 +90,7 @@ describe('collectExpectedPorts', () => {
       second: { command: 'x', ports: [7000] },
     });
     expect(collectExpectedPorts(config, ['first', 'second'])).toEqual([
-      { port: 7000, owner: 'first', source: 'ports' },
+      { port: 7000, owner: 'first', source: 'ports', required: true },
     ]);
   });
 
@@ -100,7 +100,7 @@ describe('collectExpectedPorts', () => {
       b: { command: 'x', ports: [2222] },
     });
     expect(collectExpectedPorts(config, ['a', 'nope'])).toEqual([
-      { port: 1111, owner: 'a', source: 'ports' },
+      { port: 1111, owner: 'a', source: 'ports', required: true },
     ]);
   });
 
@@ -110,8 +110,8 @@ describe('collectExpectedPorts', () => {
       processes: { a: { command: 'x' } },
     });
     expect(collectExpectedPorts(config, ['a'])).toEqual([
-      { port: 7676, owner: 'orckit', source: 'mcp' },
-      { port: 7677, owner: 'orckit', source: 'web' },
+      { port: 7676, owner: 'orckit', source: 'mcp', required: false },
+      { port: 7677, owner: 'orckit', source: 'web', required: false },
     ]);
   });
 
@@ -122,7 +122,7 @@ describe('collectExpectedPorts', () => {
       mcp: { enabled: false },
     });
     expect(collectExpectedPorts(noMcp, ['a'])).toEqual([
-      { port: 7677, owner: 'orckit', source: 'web' },
+      { port: 7677, owner: 'orckit', source: 'web', required: false },
     ]);
 
     const noWeb = validateConfig({
@@ -131,7 +131,7 @@ describe('collectExpectedPorts', () => {
       web: { enabled: false },
     });
     expect(collectExpectedPorts(noWeb, ['a'])).toEqual([
-      { port: 7676, owner: 'orckit', source: 'mcp' },
+      { port: 7676, owner: 'orckit', source: 'mcp', required: false },
     ]);
   });
 
@@ -141,9 +141,24 @@ describe('collectExpectedPorts', () => {
       processes: { a: { command: 'x', ports: [7676] } },
       web: { enabled: false },
     });
+    // ...and becomes required, because now a real process needs it.
     expect(collectExpectedPorts(config, ['a'])).toEqual([
-      { port: 7676, owner: 'a', source: 'ports' },
+      { port: 7676, owner: 'a', source: 'ports', required: true },
     ]);
+  });
+
+  it('marks only the process ports required — orckit’s own servers are optional', () => {
+    // A busy mcp/web port must never abort a boot: the CLI already degrades
+    // (warns and continues) when its own listeners can't bind, and the likeliest
+    // holder is a second project's `orc start` that must not be killed for it.
+    const config = validateConfig({
+      project: 'test',
+      processes: { api: { command: 'x', ports: [4000] } },
+    });
+    const byPort = new Map(collectExpectedPorts(config, ['api']).map((p) => [p.port, p.required]));
+    expect(byPort.get(4000)).toBe(true);
+    expect(byPort.get(7676)).toBe(false);
+    expect(byPort.get(7677)).toBe(false);
   });
 });
 

@@ -17,6 +17,14 @@ export interface ExpectedPort {
   /** Process name (or `orckit` for the built-in mcp/web listeners). */
   owner: string;
   source: 'ready-check' | 'ports' | 'mcp' | 'web';
+  /**
+   * Whether the boot cannot proceed without this port. False for orckit's own
+   * mcp/web listeners: those are conveniences the CLI already degrades over
+   * (it warns and continues), so a busy one must never abort a boot — that
+   * would make a second project's `orc start` fail just because the first is
+   * running.
+   */
+  required: boolean;
 }
 
 /**
@@ -29,20 +37,20 @@ export function collectExpectedPorts(
 ): ExpectedPort[] {
   const seen = new Set<number>();
   const out: ExpectedPort[] = [];
-  const add = (port: number, owner: string, source: ExpectedPort['source']) => {
+  const add = (port: number, owner: string, source: ExpectedPort['source'], required: boolean) => {
     if (seen.has(port)) return;
     seen.add(port);
-    out.push({ port, owner, source });
+    out.push({ port, owner, source, required });
   };
   for (const name of names) {
     const processConfig = config.processes[name];
     if (!processConfig) continue;
     const endpoint = readyCheckLocalEndpoint(processConfig.ready);
-    if (endpoint) add(endpoint.port, name, 'ready-check');
-    for (const port of processConfig.ports) add(port, name, 'ports');
+    if (endpoint) add(endpoint.port, name, 'ready-check', true);
+    for (const port of processConfig.ports) add(port, name, 'ports', true);
   }
-  if (config.mcp.enabled) add(config.mcp.port, 'orckit', 'mcp');
-  if (config.web.enabled) add(config.web.port, 'orckit', 'web');
+  if (config.mcp.enabled) add(config.mcp.port, 'orckit', 'mcp', false);
+  if (config.web.enabled) add(config.web.port, 'orckit', 'web', false);
   return out;
 }
 

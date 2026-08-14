@@ -395,7 +395,11 @@ program
       // rejection) would otherwise kill orckit with zero teardown. The
       // synchronous kill sweep guarantees children never outlive a crash.
       const onCrash = (err: unknown) => {
-        console.error(chalk.red(`\n  fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`));
+        console.error(
+          chalk.red(
+            `\n  fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+          ),
+        );
         orckit.emergencyKill();
         process.exit(1);
       };
@@ -512,11 +516,10 @@ async function resolveBlockedPorts(
   }
   if (blocked.length === 0) return;
 
-  console.log(chalk.yellow(`\n  ${blocked.length} required port(s) already in use`));
+  console.log(chalk.yellow(`\n  ${blocked.length} port(s) orckit wants are already in use`));
   const unresolved: BlockedPort[] = [];
   for (const bp of blocked) {
-    const needs =
-      bp.owner === 'orckit' ? `orckit's ${bp.source} server` : `process "${bp.owner}"`;
+    const needs = bp.owner === 'orckit' ? `orckit's ${bp.source} server` : `process "${bp.owner}"`;
     console.log(`\n  port ${chalk.bold(String(bp.port))} — needed by ${needs}, held by:`);
     for (const h of bp.holders) {
       const since = h.startedAt ? chalk.dim(` (since ${h.startedAt})`) : '';
@@ -531,6 +534,14 @@ async function resolveBlockedPorts(
             `      (\`docker ps\`) and retry.`,
         ),
       );
+      unresolved.push(bp);
+      continue;
+    }
+
+    // Never auto-kill for orckit's own mcp/web ports: the likeliest holder is
+    // another project's `orc start`, and taking down someone's whole dev
+    // environment to free a dashboard port is never the right trade.
+    if (!bp.required) {
       unresolved.push(bp);
       continue;
     }
@@ -555,14 +566,25 @@ async function resolveBlockedPorts(
     }
   }
 
-  if (unresolved.length > 0) {
-    const ports = unresolved.map((b) => b.port).join(', ');
-    const hint =
-      mode === 'fail'
-        ? ''
-        : mode === 'kill'
-          ? ''
-          : ' (pass --kill-blocked-ports to skip the prompt next time)';
+  // orckit's own mcp/web listeners are conveniences, not prerequisites — the
+  // CLI already warns and carries on when one can't bind. Aborting over them
+  // would mean a second project's `orc start` fails purely because the first
+  // one is running.
+  const optional = unresolved.filter((b) => !b.required);
+  if (optional.length > 0) {
+    for (const b of optional) {
+      console.log(
+        chalk.yellow(
+          `  ↳ :${b.port} stays in use — orckit's ${b.source} server won't start (boot continues)`,
+        ),
+      );
+    }
+  }
+
+  const required = unresolved.filter((b) => b.required);
+  if (required.length > 0) {
+    const ports = required.map((b) => b.port).join(', ');
+    const hint = mode === 'ask' ? ' (pass --kill-blocked-ports to skip the prompt next time)' : '';
     fail(new Error(`cannot start: port(s) ${ports} still in use${hint}`));
   }
 }
@@ -573,10 +595,7 @@ async function resolveBlockedPorts(
  * path runs teardown). Uses the same mode as the blocked-port check: kill,
  * ask, or fail. A stale session file with no live survivors is just deleted.
  */
-async function reapPreviousSession(
-  stateDir: string,
-  mode: 'ask' | 'kill' | 'fail',
-): Promise<void> {
+async function reapPreviousSession(stateDir: string, mode: 'ask' | 'kill' | 'fail'): Promise<void> {
   const session = readSession(stateDir);
   if (!session) return;
   // Another `orc start` is running right now against this config — its

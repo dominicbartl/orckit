@@ -68,6 +68,10 @@ function buildTree(root: number, rows: PsRow[]): ProcessTree {
   const seen = new Set<number>();
   const walk = (pid: number) => {
     if (seen.has(pid) || pid <= 1 || pid === process.pid) return;
+    // Only processes the snapshot actually saw. A root that has already exited
+    // contributes nothing, so callers never signal a PID on the strength of a
+    // stale reference to it.
+    if (!pgidOf.has(pid)) return;
     seen.add(pid);
     for (const child of childrenOf.get(pid) ?? []) walk(child);
     // Push after recursing so children precede parents: signalling deepest

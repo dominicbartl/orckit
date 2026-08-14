@@ -1,7 +1,14 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { collectProcessTree, mergeTrees, signalTree, survivors } from './process-tree.js';
+import {
+  mergeTrees,
+  signalTree,
+  snapshotAll,
+  survivors,
+  treeFrom,
+  type ProcessTree,
+} from './process-tree.js';
 
 /**
  * One process orckit spawned, persisted so a LATER `orc start` can find it if
@@ -117,7 +124,10 @@ export async function findSurvivors(session: SessionFile): Promise<SessionRecord
     // direct child being gone while an escaped grandchild keeps running (and
     // keeps a port bound).
     const live: Array<{ pid: number; command: string }> = [];
-    for (const member of [{ pid: record.pid, command: record.command }, ...(record.members ?? [])]) {
+    for (const member of [
+      { pid: record.pid, command: record.command },
+      ...(record.members ?? []),
+    ]) {
       if (live.some((m) => m.pid === member.pid)) continue;
       if (!isAlive(member.pid)) continue;
       const current = await currentCommand(member.pid);
@@ -149,18 +159,37 @@ export function commandsMatch(recorded: string, live: string): boolean {
 }
 
 /**
- * SIGTERM a survivor's whole process group, then SIGKILL anything left after
- * `graceMs`. Returns true when the group is gone.
+ * SIGTERM everything a recorded survivor still has running, then SIGKILL
+ * whatever is left after `graceMs`. Returns true once nothing remains.
+ *
+ * Every target is re-verified against its recorded command HERE, at the kill
+ * site, rather than trusting the record. The record can legitimately survive on
+ * the strength of one descendant while its root PID has been recycled by an
+ * unrelated program — signalling `record.pid`, let alone its whole process
+ * group, would then kill a stranger. Only PIDs that still run what we recorded,
+ * the groups those PIDs currently lead, and their live descendants are touched.
  */
 export async function killSurvivor(record: SessionRecord, graceMs = 5000): Promise<boolean> {
-  // Three sources, because no single one is sufficient: a live `ppid` walk
-  // (covers anything spawned since the last refresh), the recorded members
-  // (covers descendants that reparented to init and are no longer reachable
-  // from the root), and the recorded root/pgid itself.
-  const tree = mergeTrees(await collectProcessTree(record.pid), {
-    pids: [record.pid, ...(record.members ?? []).map((m) => m.pid)],
-    pgids: [record.pgid, ...(record.pgids ?? [])],
-  });
+  const candidates = [{ pid: record.pid, command: record.command }, ...(record.members ?? [])];
+  const rows = await snapshotAll();
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const ownPgid = byPid.get(process.pid)?.pgid;
+
+  const verified: number[] = [];
+  const pgids = new Set<number>();
+  for (const candidate of candidates) {
+    if (candidate.pid <= 1 || candidate.pid === process.pid) continue;
+    const row = byPid.get(candidate.pid);
+    if (!row || !commandsMatch(candidate.command, row.command)) continue;
+    verified.push(candidate.pid);
+    if (row.pgid > 1 && row.pgid !== ownPgid) pgids.add(row.pgid);
+  }
+  if (verified.length === 0) return true;
+
+  // Descendants of a verified process are ours by definition — this picks up
+  // anything spawned since the session file's last refresh.
+  let tree: ProcessTree = { pids: verified, pgids: [...pgids] };
+  for (const pid of verified) tree = mergeTrees(tree, treeFrom(rows, pid));
 
   signalTree(tree, 'SIGTERM');
   const deadline = Date.now() + graceMs;

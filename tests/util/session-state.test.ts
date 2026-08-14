@@ -143,6 +143,25 @@ describe('session file round-trip', () => {
     expect(readSession(dir)).not.toBeNull();
   });
 
+  it('round-trips recorded members and escaped process groups', () => {
+    // A record is only useful to a LATER `orc start` if the descendant table
+    // survives serialization — that's the only handle on an escaped grandchild.
+    const dir = scratch();
+    const record = {
+      name: 'api',
+      pid: 123,
+      pgid: 123,
+      command: 'node server.js',
+      members: [
+        { pid: 124, command: 'node worker.js' },
+        { pid: 125, command: 'esbuild --watch' },
+      ],
+      pgids: [123, 125],
+    };
+    writeSession(dir, session([record]));
+    expect(readSession(dir)?.processes[0]).toEqual(record);
+  });
+
   it('returns null for a missing, malformed or wrong-shaped file', () => {
     const dir = scratch();
     expect(readSession(dir)).toBeNull();
@@ -323,6 +342,48 @@ describe('killSurvivor', () => {
 
     expect(killed).toBe(true);
     for (const member of escaped) expect(isAlive(member.pid)).toBe(false);
+  });
+
+  it('never signals a recycled root PID, or its process group', async () => {
+    // The dangerous shape: a stale record whose root PID has been reused by an
+    // unrelated program, kept alive only by a still-matching member. Targeting
+    // `record.pid` — let alone `-record.pgid` — would kill a stranger AND
+    // everything sharing its group, so both must be verified at the kill site.
+    const bystander = await detachedSleep();
+    const victim = await detachedSleep();
+
+    const killed = await killSurvivor(
+      {
+        name: 'stale',
+        // Live, but running something else than what was recorded for it.
+        pid: bystander.pid,
+        pgid: bystander.pid,
+        command: 'postgres -D /var/lib/pg',
+        members: [{ pid: victim.pid, command: victim.command }],
+      },
+      2000,
+    );
+
+    expect(killed).toBe(true);
+    expect(isAlive(victim.pid)).toBe(false);
+    expect(isAlive(bystander.pid)).toBe(true);
+  });
+
+  it('does nothing when every candidate fails verification', async () => {
+    const bystander = await detachedSleep();
+    const killed = await killSurvivor(
+      {
+        name: 'ghost',
+        pid: bystander.pid,
+        pgid: bystander.pid,
+        command: 'some-long-gone-daemon --serve',
+        members: [{ pid: bystander.pid, command: 'also-not-this' }],
+      },
+      500,
+    );
+
+    expect(killed).toBe(true);
+    expect(isAlive(bystander.pid)).toBe(true);
   });
 
   it('escalates to SIGKILL for a process that ignores SIGTERM', async () => {
