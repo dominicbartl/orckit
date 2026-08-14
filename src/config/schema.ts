@@ -124,6 +124,14 @@ export const processConfigSchema = z
      * `pnpm install` of a heavy toolchain (Angular, Next) can exceed a minute.
      */
     hook_timeout_ms: z.number().int().positive().default(60_000),
+    /**
+     * How long (ms) to wait after SIGTERM for this process's tree to exit
+     * before escalating to SIGKILL. Default 10s. Raise it for anything that
+     * needs to flush on shutdown — a database checkpointing, a build cache
+     * being written — where a SIGKILL costs real work or corrupts state.
+     * Lower it for processes you know die instantly.
+     */
+    stop_grace_ms: z.number().int().nonnegative().default(10_000),
     buffer_size: z.number().int().positive().default(1000),
     /**
      * When true, a boot-time failure of this process does NOT abort `orc start`.
@@ -180,7 +188,40 @@ export const processConfigSchema = z
         path: ['container_name'],
       });
     }
+    // `docker run --name X` under any type but `docker` is an orphan factory:
+    // the container is owned by the daemon, not by the CLI client orckit
+    // signals, so a SIGTERM the container's entrypoint ignores (mysql during
+    // init, postgres mid-checkpoint) leaves the container running with its
+    // ports bound after orckit exits. `--rm` does not help: it only fires when
+    // the container actually stops. `type: docker` + `container_name` is what
+    // makes orckit force-remove the container before spawn and after stop.
+    if (data.type !== 'docker') {
+      const named = detectDockerRunName(data.command);
+      if (named) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['type'],
+          message:
+            `command runs a named Docker container (--name ${named}) but type is "${data.type}" — ` +
+            `orckit can only clean up the container for type: docker. ` +
+            `Add \`type: docker\` and \`container_name: ${named}\`, otherwise the container ` +
+            `survives shutdown and keeps its published ports bound.`,
+        });
+      }
+    }
   });
+
+/**
+ * The `--name` of a `docker run` in a shell command, or null. Deliberately
+ * narrow: only matches an actual `docker run` (not `docker exec`, `docker
+ * compose`, or a `--name` belonging to some other program) so it can back a
+ * hard validation error without false positives.
+ */
+export function detectDockerRunName(command: string): string | null {
+  if (!/(^|[;&|]\s*|\s)docker\s+run\b/.test(command)) return null;
+  const match = /\s--name[=\s]+["']?([a-zA-Z0-9][a-zA-Z0-9_.-]*)["']?/.exec(command);
+  return match?.[1] ?? null;
+}
 
 const preflightCheckSchema = z.object({
   name: z.string().min(1),

@@ -17,6 +17,8 @@ Use it when a developer needs `db → api → web` started in order with health 
 5. Run `npx orc validate -c orckit.yaml`. It parses the file, builds the dependency graph, prints both, and exits non-zero on any problem. **Always run this before declaring the config done.**
 6. Optionally `npx orc start` to verify the boot sequence actually works — on a TTY this pins a persistent dashboard (brand + wave-grouped graph + counters footer) to the bottom of the terminal. Process state, build progress, and timing render live in the graph; `--show-output` adds streamed stdout/stderr above it. Pass `--no-live` if you need plain line-by-line output (e.g. capturing to a log file).
 
+When you run `orc start` yourself (non-interactively, output captured), stdin isn't a TTY, so a port left bound by a previous run aborts the boot instead of prompting. Pass `--kill-blocked-ports` to reclaim those ports unattended, or `--fail-on-blocked-ports` to make the abort explicit. Never work around a blocked port by editing the config to use a different port — that hides a leftover process the user still has running.
+
 ## Minimal valid config
 
 ```yaml
@@ -133,21 +135,21 @@ Each hook is killed after `hook_timeout_ms` (default 60s) and the timeout is rep
 
 ## `stop_command` — clean shutdown for CLI clients
 
-A process whose visible command is just a *client* of something else (the canonical case is `docker run`, where the container is owned by `dockerd` and survives the local CLI being killed) needs an explicit stop verb. Set `stop_command` to that verb — orckit runs it during shutdown instead of SIGTERM:
+A process whose visible command is just a *client* of something else — the resource is owned by a daemon and survives the local CLI being killed — needs an explicit stop verb. Set `stop_command` to that verb; orckit runs it during shutdown instead of SIGTERM:
 
 ```yaml
 processes:
-  db:
-    command: docker run --rm --name=app-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15
-    stop_command: docker stop app-db
+  stack:
+    command: docker compose up
+    stop_command: docker compose down
     ready: { type: tcp, port: 5432 }
 ```
 
-The flow on Ctrl-C: orckit runs `docker stop app-db` → dockerd sends SIGTERM to the container → container exits → `docker run` exits → `--rm` cleans up the container. If the main process is still alive after the grace window (10s), orckit SIGKILLs as a last resort.
+The flow on Ctrl-C: orckit runs `docker compose down` → dockerd stops the containers → `docker compose up` exits. If the main process is still alive after the grace window (`stop_grace_ms`, default 10s), orckit SIGKILLs as a last resort.
 
-Use it whenever you see `docker run`, `docker compose up`, `kubectl port-forward`, `ngrok http`, or any other foreground CLI that proxies a daemon-managed resource. Pair `docker run` with `--name=<n>` so the stop command has a stable handle. For `docker compose up`, the natural pairing is `stop_command: docker compose down`.
+Use it for `docker compose up`, `kubectl port-forward`, `ngrok http`, or any other foreground CLI that proxies a daemon-managed resource. For a single `docker run --name X`, do **not** use this — use `type: docker` + `container_name` (see below); validation rejects the `stop_command` form.
 
-**Prefer `type: docker`** for the plain `docker run --name X ...` case — it `docker rm -f X`s the container both before every spawn (clears orphans from a previous crash) and after stop (frees its ports), with no `stop_command` to keep in sync. Only fall back to manual `stop_command` for shapes the docker type can't express (compose, multi-container, no stable container name).
+**`type: docker` is required** for the plain `docker run --name X ...` case — config validation *rejects* a `docker run --name X` command on any other type, because orckit can only `docker rm -f X` the container (before every spawn and after every stop) when it knows the container name. Without it, a SIGTERM the container's entrypoint ignores — MySQL does exactly this during its init phase — leaves the container running with its ports bound after orckit exits, and `--rm` never fires because the container never stopped. Fall back to `type: bash` + `stop_command` only for shapes the docker type can't express (compose, multi-container, no stable container name).
 
 Don't set it on plain processes (node, python, etc.) — SIGTERM is correct there and `stop_command` would just be extra config to keep in sync.
 
@@ -167,7 +169,8 @@ emulators:
 After the normal stop path completes, orckit checks each port and force-kills whatever still holds it (via `lsof`). Caveats to flag when suggesting it:
 - **POSIX-only** — needs `lsof`; it's a silent no-op on platforms without it (Windows).
 - **Resource-based, not tree-based** — it kills *whatever* owns the port, including an unrelated process you started by hand. Only enable it for ports the process genuinely owns.
-- A `tcp` ready-check port is swept automatically — don't repeat it in `ports`.
+- A local `tcp`/`http` ready-check port is swept automatically — don't repeat it in `ports`.
+- Only **listeners** are killed; a process that merely holds a client connection to the port is left alone.
 
 Don't reach for this by default. Plain `node`/`python`/`docker` processes come down cleanly with SIGTERM (and `type: docker` already frees its ports via `docker rm -f`). It's specifically for fork-heavy, port-holding tools that leak.
 
@@ -234,8 +237,9 @@ Set `command` to match the user's IDE if it isn't WebStorm. If a user says click
 4. Every preflight check has an actionable `on_fail` message.
 5. `restart` policy matches the process's nature (long-running vs one-shot).
 6. `manual_retry: true` only on processes whose failure means "external thing isn't ready" — not on regular services.
-7. Plain `docker run --name X` processes use `type: docker` + `container_name: X` (not `type: bash` + manual `stop_command`). The `container_name` must match the `--name=` in `command`.
-8. No secrets in `env`.
+7. Plain `docker run --name X` processes use `type: docker` + `container_name: X` (not `type: bash` + manual `stop_command`). The `container_name` must match the `--name=` in `command`. Validation now rejects the `type: bash` form outright.
+8. Anything that must flush on shutdown (databases, caches) has a `stop_grace_ms` large enough to finish — the default is 10s, after which orckit escalates to SIGKILL.
+9. No secrets in `env`.
 
 ## Programmatic API
 

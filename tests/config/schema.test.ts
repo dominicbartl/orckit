@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  detectDockerRunName,
   orckitConfigSchema,
   processConfigSchema,
   readyCheckSchema,
@@ -66,11 +67,14 @@ describe('processConfigSchema', () => {
   });
 
   it('accepts stop_command', () => {
+    // NB: a `docker run --name ...` command would be rejected under type: bash
+    // (see "named docker containers" below) — `docker compose` is the shape
+    // stop_command actually exists for.
     const parsed = processConfigSchema.parse({
-      command: 'docker run --name foo postgres:15',
-      stop_command: 'docker stop foo',
+      command: 'docker compose up',
+      stop_command: 'docker compose down',
     });
-    expect(parsed.stop_command).toBe('docker stop foo');
+    expect(parsed.stop_command).toBe('docker compose down');
   });
 
   it('requires a command', () => {
@@ -145,6 +149,99 @@ describe('processConfigSchema', () => {
       });
       expect(parsed.stop_command).toBe('docker compose down');
     });
+  });
+
+  describe('named docker containers under a non-docker type', () => {
+    // A `docker run --name X` container is owned by the daemon, not by the CLI
+    // client orckit signals — so under any type but `docker` it survives
+    // shutdown with its ports bound. The schema rejects it rather than letting
+    // the user discover the orphan later.
+    it('rejects a bash process that runs a named container', () => {
+      expect(() =>
+        processConfigSchema.parse({
+          command: 'docker run --rm --name foo -p 5432:5432 postgres:16',
+        }),
+      ).toThrow(/--name foo/);
+    });
+
+    it('names the container and the fix in the error message', () => {
+      const result = processConfigSchema.safeParse({
+        type: 'webpack',
+        command: 'docker run --name mydb postgres:16',
+      });
+      expect(result.success).toBe(false);
+      const message = result.error!.issues[0]!.message;
+      expect(message).toMatch(/--name mydb/);
+      expect(message).toMatch(/type: docker/);
+      expect(message).toMatch(/container_name: mydb/);
+      expect(result.error!.issues[0]!.path).toEqual(['type']);
+    });
+
+    it('accepts the same command with type: docker + container_name', () => {
+      const parsed = processConfigSchema.parse({
+        type: 'docker',
+        command: 'docker run --rm --name foo -p 5432:5432 postgres:16',
+        container_name: 'foo',
+      });
+      expect(parsed.type).toBe('docker');
+      expect(parsed.container_name).toBe('foo');
+    });
+
+    it('does not flag docker exec, docker compose, or an unrelated --name', () => {
+      expect(() =>
+        processConfigSchema.parse({ command: 'docker exec --name foo api ls' }),
+      ).not.toThrow();
+      expect(() =>
+        processConfigSchema.parse({ command: 'docker compose up --name foo' }),
+      ).not.toThrow();
+      expect(() =>
+        processConfigSchema.parse({ command: './server --name worker --port 3000' }),
+      ).not.toThrow();
+      expect(() => processConfigSchema.parse({ command: 'docker run postgres:16' })).not.toThrow();
+    });
+  });
+});
+
+describe('detectDockerRunName', () => {
+  it('finds a space-separated --name', () => {
+    expect(detectDockerRunName('docker run --name foo postgres:16')).toBe('foo');
+  });
+
+  it('finds an =-separated --name', () => {
+    expect(detectDockerRunName('docker run --name=foo postgres:16')).toBe('foo');
+  });
+
+  it('strips quotes around the name', () => {
+    expect(detectDockerRunName('docker run --name "my-db" postgres:16')).toBe('my-db');
+    expect(detectDockerRunName("docker run --name 'my_db.1' postgres:16")).toBe('my_db.1');
+  });
+
+  it('finds a docker run further down a pipeline', () => {
+    expect(detectDockerRunName('echo starting && docker run --rm --name db postgres:16')).toBe(
+      'db',
+    );
+    expect(detectDockerRunName('mkdir -p data; docker run --name db postgres:16')).toBe('db');
+  });
+
+  it('returns null for a docker run without --name', () => {
+    expect(detectDockerRunName('docker run --rm -p 5432:5432 postgres:16')).toBeNull();
+  });
+
+  it('returns null for docker subcommands other than run', () => {
+    expect(detectDockerRunName('docker exec --name foo api ls')).toBeNull();
+    expect(detectDockerRunName('docker compose up -d')).toBeNull();
+    expect(detectDockerRunName('docker compose run --name foo api')).toBeNull();
+    expect(detectDockerRunName('docker build --name foo .')).toBeNull();
+  });
+
+  it('returns null when "docker run" is only part of a longer word', () => {
+    expect(detectDockerRunName('mydocker run --name foo img')).toBeNull();
+    expect(detectDockerRunName('docker-compose run --name foo api')).toBeNull();
+    expect(detectDockerRunName('npm run docker --name foo')).toBeNull();
+  });
+
+  it('returns null for a command with no docker at all', () => {
+    expect(detectDockerRunName('pnpm dev --name foo')).toBeNull();
   });
 });
 

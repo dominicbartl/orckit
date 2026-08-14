@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { execa, type ResultPromise } from 'execa';
 import treeKill from 'tree-kill';
 import type { ProcessConfig } from '../config/schema.js';
+import { readyCheckLocalEndpoint } from '../health/checks.js';
 import { mergeEnv } from '../util/env.js';
 import { bindLineStream } from '../util/line-stream.js';
 import { killPortHolders } from '../util/port.js';
@@ -25,6 +26,14 @@ export interface RunnerEvents {
    * per freed (port, pid) so a reporter can surface the resource-based cleanup.
    */
   port_freed: [port: number, pid: number];
+  /**
+   * The stop path had to synthesize this process's exit: after SIGKILL its
+   * stdio pipes were still held, which means at least one descendant escaped
+   * the process group and is probably still running. This is the one case
+   * where teardown cannot guarantee a reaped tree — a reporter should say so
+   * rather than print a clean "stopped".
+   */
+  escaped: [];
 }
 
 const DEFAULT_GRACE_MS = 10_000;
@@ -40,6 +49,7 @@ const SIGKILL_REAP_MS = 2_000;
 export class Runner extends EventEmitter<RunnerEvents> {
   private process: ResultPromise | null = null;
   private exited = false;
+  private stopPromise: Promise<void> | null = null;
   private _exitCode: number | null = null;
   private _exitSignal: NodeJS.Signals | null = null;
 
@@ -120,7 +130,17 @@ export class Runner extends EventEmitter<RunnerEvents> {
     );
   }
 
-  async stop(graceMs = DEFAULT_GRACE_MS): Promise<void> {
+  stop(graceMs = DEFAULT_GRACE_MS): Promise<void> {
+    // Single-flight: a shutdown-cancelled startup and the orchestrator's
+    // stopOne() can both call stop() on the same runner concurrently. Both must
+    // observe ONE teardown (SIGTERM → grace → SIGKILL), not race two.
+    if (!this.stopPromise) {
+      this.stopPromise = this.doStop(graceMs);
+    }
+    return this.stopPromise;
+  }
+
+  private async doStop(graceMs: number): Promise<void> {
     if (!this.process || this.exited) {
       this.process = null;
       return;
@@ -180,12 +200,14 @@ export class Runner extends EventEmitter<RunnerEvents> {
   }
 
   /**
-   * Ports the sweep should reclaim: the explicit `ports` list plus the `tcp`
-   * ready-check port (the one most likely to be held), de-duplicated.
+   * Ports the sweep should reclaim: the explicit `ports` list plus the local
+   * `tcp`/`http` ready-check port (the one most likely to be held),
+   * de-duplicated.
    */
   private declaredPorts(): number[] {
     const ports = new Set(this.config.ports ?? []);
-    if (this.config.ready?.type === 'tcp') ports.add(this.config.ready.port);
+    const endpoint = readyCheckLocalEndpoint(this.config.ready);
+    if (endpoint) ports.add(endpoint.port);
     return [...ports];
   }
 
@@ -198,6 +220,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
   private forceExit(): void {
     this.exited = true;
     this._exitSignal = 'SIGKILL';
+    this.emit('escaped');
     this.process?.stdout?.destroy();
     this.process?.stderr?.destroy();
     this.emit('exit', this._exitCode, this._exitSignal);

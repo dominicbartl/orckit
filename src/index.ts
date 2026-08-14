@@ -1,4 +1,4 @@
-export { Orckit, BootFailedError } from './orchestrator/orchestrator.js';
+export { Orckit, BootFailedError, StartupAbortedError } from './orchestrator/orchestrator.js';
 export type { OrckitEvents, BootSummary, RestartOptions } from './orchestrator/orchestrator.js';
 
 export {
@@ -62,7 +62,21 @@ export { runHook, HookError, type HookKind, type HookContext } from './orchestra
 export { runPreflight, PreflightError, type PreflightResult } from './orchestrator/preflight.js';
 
 export { parseDuration, formatDuration } from './config/duration.js';
-export { isPortFree } from './util/port.js';
+export {
+  isPortFree,
+  findPortHolders,
+  describePortHolders,
+  freePort,
+  killPortHolders,
+  type PortHolderInfo,
+} from './util/port.js';
+export {
+  collectExpectedPorts,
+  findBlockedPorts,
+  isContainerProxy,
+  type ExpectedPort,
+  type BlockedPort,
+} from './util/blocked-ports.js';
 
 export {
   attachCliReporter,
@@ -75,6 +89,23 @@ export {
   type LogReporterHandle,
 } from './reporter/log-reporter.js';
 export { renderGraph, type RenderGraphOptions } from './reporter/graph-view.js';
+export {
+  attachSessionTracker,
+  type SessionTrackerOptions,
+  type SessionTrackerHandle,
+} from './reporter/session-tracker.js';
+export {
+  readSession,
+  writeSession,
+  clearSession,
+  findSurvivors,
+  killSurvivor,
+  commandsMatch,
+  isAlive,
+  sessionFilePath,
+  type SessionRecord,
+  type SessionFile,
+} from './util/session-state.js';
 export {
   attachDashboard,
   type DashboardOptions,

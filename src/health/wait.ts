@@ -28,6 +28,12 @@ export async function waitForReady(probe: HealthProbe, options: WaitOptions = {}
     }
     attempt++;
     const result = await probe.check();
+    // Re-check after the await: an abort that landed while the probe ran must
+    // win even when the probe reports ready, or a cancelled startup would
+    // continue into "ready" against a process that's already being stopped.
+    if (options.signal?.aborted) {
+      throw new Error('health check aborted');
+    }
     options.onAttempt?.(attempt, result);
     if (result.ok) return;
     lastReason = result.reason;

@@ -16,6 +16,14 @@ export interface HookContext {
    * thrown HookError regardless.
    */
   onLine?: (line: string, stream: 'stdout' | 'stderr') => void;
+  /**
+   * When aborted, the hook subprocess is terminated (SIGTERM via execa's
+   * cancelSignal) and the hook rejects. The orchestrator wires its per-startup
+   * abort into `pre_start`/`post_start` so a shutdown or restart that lands
+   * mid-hook (a long `pnpm install`) kills the hook instead of letting it —
+   * and the process spawn queued behind it — outlive the teardown.
+   */
+  cancelSignal?: AbortSignal;
 }
 
 export class HookError extends Error {
@@ -44,6 +52,7 @@ export async function runHook(
     cwd: ctx.cwd ?? process.cwd(),
     env: mergeEnv(ctx.env ?? {}),
     timeout: ctx.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
+    cancelSignal: ctx.cancelSignal,
     reject: false,
     // Stream when a sink is given so output can be piped live; otherwise let
     // execa buffer it (the failure path reads result.stderr below).

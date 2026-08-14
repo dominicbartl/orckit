@@ -59,6 +59,8 @@ src/
     brand.ts          # ANSI brand mark (mirrors the SVG bars in web-ui),
                       # plus brandHeader(labels) for the dashboard top region.
     log-reporter.ts   # Per-process .log files, one writer per process.
+    session-tracker.ts # Maintains util/session-state.ts's file from
+                      # process:spawned / stopped / failed / finished.
     repl.ts           # Plain-mode interactive prompt (r / r! / s / q).
                       # Not attached when the dashboard is on — browser owns
                       # the action surface in that mode.
@@ -86,7 +88,16 @@ src/
 
   util/
     env.ts            # mergeEnv (process.env + extras)
-    port.ts           # isPortFree
+    port.ts           # isPortFree, findPortHolders (LISTEN only),
+                      # describePortHolders (pid/command/start time), freePort
+                      # (SIGTERM → grace → SIGKILL), killPortHolders
+    blocked-ports.ts  # collectExpectedPorts (every port a boot needs) +
+                      # findBlockedPorts + isContainerProxy. Backs the CLI's
+                      # pre-boot conflict check.
+    session-state.ts  # .orckit/session.json — the spawned process groups of the
+                      # CURRENT run, so the NEXT `orc start` can reap them if
+                      # this one is SIGKILLed (the one exit no handler covers).
+                      # Survivors are PID-reuse-guarded by command match.
     line-stream.ts    # bindLineStream — shared line-buffered stream reader
                       # (Runner output + streamed hook output)
 
@@ -130,6 +141,39 @@ running ──(SIGTERM/SIGKILL via dispose)────────────�
 - Long-running with health probe: spawn → race(`waitForReady(probe)`, `runner.exit`) → ready+running; if exit wins, fail.
 - Unexpected exit while `running`: fail → maybe restart per policy with `restart_delay_ms` and `max_retries`. The auto-restart delay is wrapped in an `AbortController` stored on the handle so a manual `restart()` can preempt it.
 - Explicit `stop()`: pre_stop hook → SIGTERM → grace → SIGKILL → post_stop hook → emit stopped.
+
+### Shutdown: the no-orphan invariant
+
+Children are spawned `detached`, so they never receive the terminal's Ctrl-C —
+**orckit's teardown is the only thing that can stop them**, and every exit path
+must run it. The rules that keep this true:
+
+- `spawnAndAwaitReady` is cancellable at *every* await point. Each attempt owns
+  an `AbortController` (`handle.shutdown`) created **before** the first await, so
+  a stop landing mid-`pre_start`-hook cancels the hook (via execa's
+  `cancelSignal`) and the spawn behind it never happens. It re-checks
+  `cancelled()` after each await and immediately before `runner.start()`, and
+  unwinds with `StartupAbortedError` — which is *not* a failure and must not
+  mark the process `failed`.
+- `handle.startup` holds the in-flight startup promise; `stopOne` aborts and
+  **awaits** it, including for non-active states (a `pending` process whose hook
+  is still running). Teardown cannot finish while a startup is unwinding.
+- `stopping` (full stop) and `disposed` (one-way, set by `dispose()`) gate every
+  spawn path: the wave loop, `startTargets`, `restart`, `kickPending`,
+  `maybeRestart` (re-checked *after* its delay), and the web action endpoints.
+  A targeted `stop([name])` deliberately does NOT set `stopping`.
+- Stop hooks (`pre_stop`/`post_stop`) can never block the kill path — their
+  rejections are caught in `stopOne`. A failing hook used to abort the whole
+  teardown and orphan everything still inside its grace window.
+- `emergencyKill()` is the synchronous last resort (double Ctrl-C,
+  `uncaughtException`, `unhandledRejection`, shutdown watchdog): SIGKILLs every
+  live process group and `docker rm -f`s containers with no awaits.
+- The CLI handles SIGINT/SIGTERM/**SIGHUP**, is single-flight (a boot failure
+  arriving during a signal-driven shutdown joins it instead of hard-exiting),
+  and never calls `process.exit()` on a path that leaves children alive.
+
+When changing any of this, re-run `tests/integration/shutdown.test.ts` — it
+spawns real processes and asserts nothing survives.
 
 ### Partial boot + manual retry
 

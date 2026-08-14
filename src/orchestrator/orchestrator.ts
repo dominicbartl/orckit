@@ -22,7 +22,7 @@ import {
   type ProcessState,
 } from './lifecycle.js';
 import { runHook, type HookKind } from './hooks.js';
-import { removeDockerContainer } from './docker.js';
+import { removeDockerContainer, removeDockerContainerSync } from './docker.js';
 import { PreflightError, runPreflight, type PreflightResult } from './preflight.js';
 
 export interface BootSummary {
@@ -54,18 +54,46 @@ export class BootFailedError extends Error {
   }
 }
 
+/**
+ * Thrown (internally) by a startup that was cancelled because a shutdown or
+ * restart landed while it was still in flight — mid `pre_start` hook, between
+ * hook and spawn, or during the health wait. It deliberately does NOT mark the
+ * process `failed`: a cancelled start is not a failure, and treating it as one
+ * would turn every Ctrl-C during boot into a spurious `BootFailedError`.
+ */
+export class StartupAbortedError extends Error {
+  constructor(name: string) {
+    super(`startup of "${name}" aborted by shutdown`);
+    this.name = 'StartupAbortedError';
+  }
+}
+
 export type OrckitEvents = {
   'preflight:start': [];
   'preflight:result': [result: PreflightResult];
   'preflight:complete': [allPassed: boolean];
   'process:state': [name: string, state: ProcessState];
   'process:starting': [name: string];
+  /**
+   * The subprocess exists: `pid` is also its process-group id (children are
+   * spawned detached). Emitted once per spawn attempt, before any ready check.
+   * Consumers that need to reach the OS process — session tracking, external
+   * supervisors — should key off this rather than `process:starting`, which
+   * fires before the spawn.
+   */
+  'process:spawned': [name: string, pid: number, command: string];
   'process:ready': [name: string, durationMs: number];
   'process:running': [name: string];
   'process:finished': [name: string, durationMs: number];
   'process:stopping': [name: string];
   'process:killed': [name: string, signal: NodeJS.Signals];
   'process:port-freed': [name: string, port: number, pid: number];
+  /**
+   * A descendant of this process escaped the process group and survived
+   * SIGKILL of the tree — teardown could not prove it was reaped. Rare; the
+   * fix is usually declaring the process's `ports` with `kill_orphan_ports`.
+   */
+  'process:escaped': [name: string];
   'process:stopped': [name: string, durationMs?: number];
   'process:failed': [name: string, error?: Error];
   'process:restarting': [name: string, attempt: number];
@@ -87,7 +115,20 @@ interface Handle {
   buffer: OutputBuffer;
   parser: LineParser | null;
   retries: number;
+  /**
+   * Abort controller for the CURRENT startup attempt, created before the
+   * pre_start hook runs (so a stop can cancel the hook, not just the health
+   * wait). Aborting it makes the in-flight `spawnAndAwaitReady` unwind with
+   * `StartupAbortedError` instead of spawning/continuing.
+   */
   shutdown: AbortController | null;
+  /**
+   * The in-flight `spawnAndAwaitReady` promise, if any. `stopOne` awaits it
+   * (after aborting) so teardown can't complete while a startup is still
+   * running — the exact race that used to spawn a detached child AFTER
+   * shutdown had finished.
+   */
+  startup: Promise<void> | null;
   restartAbort: AbortController | null;
   startedAt: number | null;
   stoppingAt: number | null;
@@ -102,6 +143,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   private readonly graph: DependencyGraph;
   private readonly handles = new Map<string, Handle>();
   private stopping = false;
+  /** Set once by dispose(); permanently blocks every spawn path afterwards. */
+  private disposed = false;
   private inStartLoop = false;
 
   constructor(public readonly config: OrckitConfig) {
@@ -117,6 +160,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 
   async start(targets?: string[]): Promise<BootSummary> {
+    if (this.disposed) {
+      throw new Error('orchestrator has been disposed — create a new Orckit to start again');
+    }
     if (this.config.preflight.length > 0) {
       await this.doPreflight();
     }
@@ -140,6 +186,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     this.inStartLoop = true;
     try {
       for (const wave of waves) {
+        // A shutdown that landed mid-boot must stop the wave driver too —
+        // otherwise later waves would keep spawning into the teardown.
+        if (this.stopping || this.disposed) break;
         const startable = wave.filter((name) => this.depsReady(name));
         if (startable.length === 0) continue;
         await Promise.allSettled(
@@ -162,22 +211,33 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     if (summary.strictFailures.length > 0) {
       throw new BootFailedError(summary.strictFailures, summary);
     }
-    if (summary.failed.length === 0 && summary.pending.length === 0) {
+    if (
+      summary.failed.length === 0 &&
+      summary.pending.length === 0 &&
+      summary.ready.length > 0 &&
+      !this.stopping &&
+      !this.disposed
+    ) {
       this.emit('all:ready', summary.ready);
     }
     return summary;
   }
 
   async stop(targets?: string[]): Promise<void> {
-    this.stopping = true;
-    // Cancel any pending auto-restart timers up-front so they don't try to revive
-    // processes while we're tearing down.
-    for (const handle of this.handles.values()) {
-      handle.restartAbort?.abort();
-    }
-
     const order = resolveStartOrder(this.graph);
-    const toStop = targets && targets.length > 0 ? new Set(targets) : new Set(order);
+    const fullStop = !targets || targets.length === 0;
+    const toStop = fullStop ? new Set(order) : new Set(targets);
+
+    // The global `stopping` flag suppresses every spawn path (wave loop,
+    // kickPending, maybeRestart, in-flight startups). Only a FULL stop may set
+    // it — a targeted stop of one process must not classify an unrelated
+    // concurrent crash as "expected" or block unrelated restarts.
+    if (fullStop) this.stopping = true;
+    // Cancel pending auto-restart timers for the processes being stopped so
+    // they don't try to revive them while we're tearing down.
+    for (const name of toStop) {
+      this.handles.get(name)?.restartAbort?.abort();
+    }
     // Tear processes down in parallel. Each stopOne() waits up to the per-process
     // grace window (10s) for a clean exit before escalating to SIGKILL; doing
     // them sequentially would sum those windows — with a dozen processes that's
@@ -187,7 +247,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // used to broadcast SIGINT to the whole process group simultaneously).
     const stopping = [...order].filter((n) => toStop.has(n)).map((n) => this.stopOne(n));
     await Promise.all(stopping);
-    this.stopping = false;
+    // A disposed orchestrator stays stopping forever; a resettable full stop
+    // may be followed by a fresh start() (library/test usage).
+    if (fullStop && !this.disposed) this.stopping = false;
   }
 
   /**
@@ -202,6 +264,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
    */
   async startTargets(targets: string[]): Promise<void> {
     if (targets.length === 0) return;
+    if (this.stopping || this.disposed) {
+      throw new Error('orchestrator is shutting down — cannot start processes');
+    }
 
     const required = filterToTargets(this.graph, targets);
     const order = resolveStartOrder(this.graph).filter((n) => required.has(n));
@@ -226,6 +291,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 
   async restart(targets: string[], options: RestartOptions = {}): Promise<void> {
+    if (this.stopping || this.disposed) {
+      throw new Error('orchestrator is shutting down — cannot restart processes');
+    }
     const cascade = options.cascade !== false;
 
     const toRestart = new Set<string>();
@@ -304,7 +372,43 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 
   async dispose(): Promise<void> {
+    // One-way latch: from here on no spawn path (start, startTargets, restart,
+    // kickPending, maybeRestart, web/MCP action endpoints) may create a child.
+    this.disposed = true;
+    this.stopping = true;
     await this.stop();
+  }
+
+  /**
+   * Last-ditch, fully SYNCHRONOUS kill sweep for crash paths
+   * (uncaughtException / unhandledRejection) where no async teardown can be
+   * awaited. SIGKILLs every live runner's process group. Skips hooks, docker
+   * cleanup and port sweeps — this is strictly better than exiting with the
+   * children alive, not a replacement for `dispose()`.
+   */
+  emergencyKill(): void {
+    this.disposed = true;
+    this.stopping = true;
+    for (const handle of this.handles.values()) {
+      handle.restartAbort?.abort();
+      handle.shutdown?.abort();
+      const pid = handle.runner?.pid;
+      if (pid != null && handle.runner?.running) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // group already gone
+        }
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // process already gone
+        }
+      }
+      // Containers are owned by the daemon: killing the `docker run` client
+      // does not stop them, so they'd survive with their ports bound.
+      removeDockerContainerSync(handle.config);
+    }
   }
 
   // ------- internals -------
@@ -337,7 +441,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
    * awaits each child sequentially and would race with a kicked start.
    */
   private kickPending(): void {
-    if (this.inStartLoop) return;
+    if (this.inStartLoop || this.stopping || this.disposed) return;
     for (const [name, handle] of this.handles) {
       if (handle.state !== 'pending') continue;
       if (!this.depsReady(name)) continue;
@@ -363,13 +467,35 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     await this.spawnAndAwaitReady(name);
   }
 
-  private async spawnAndAwaitReady(name: string): Promise<void> {
+  private spawnAndAwaitReady(name: string): Promise<void> {
     const handle = this.requireHandle(name);
+    // Track the in-flight startup on the handle so stopOne() can await it —
+    // teardown must not complete while a startup is still unwinding, or the
+    // startup's spawn can land AFTER shutdown finished (a permanent orphan,
+    // since children are detached and never see the terminal's Ctrl-C).
+    const startup = this.doSpawnAndAwaitReady(name).finally(() => {
+      if (handle.startup === startup) handle.startup = null;
+    });
+    handle.startup = startup;
+    return startup;
+  }
+
+  private async doSpawnAndAwaitReady(name: string): Promise<void> {
+    const handle = this.requireHandle(name);
+    if (this.stopping || this.disposed) throw new StartupAbortedError(name);
+
+    // Per-attempt abort, created BEFORE any await so a stop that lands at any
+    // point of the startup — docker cleanup, pre_start hook, port probe,
+    // health wait — can cancel it. stopOne() aborts this regardless of state.
+    const abort = new AbortController();
+    handle.shutdown = abort;
+    const cancelled = () => abort.signal.aborted || this.stopping || this.disposed;
 
     // For `type: docker`, nuke any container left over from a previous run
     // before pre_start. Failures are swallowed inside the helper — the upcoming
     // `docker run` will surface the real error if docker itself is broken.
     await removeDockerContainer(handle.config);
+    if (cancelled()) throw new StartupAbortedError(name);
 
     // A failing pre_start hook runs BEFORE the process transitions out of
     // `pending`, so without this it would throw and leave the process stuck in
@@ -377,12 +503,18 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // Mark it `failed` so it flows through the normal strict-failure / manual_retry
     // path like any other spawn failure.
     try {
-      await this.runHookSafe(name, 'pre_start');
+      await this.runHookSafe(name, 'pre_start', abort.signal);
     } catch (err) {
+      if (cancelled()) throw new StartupAbortedError(name);
       this.applyEvent(name, { kind: 'fail' });
       this.emit('process:failed', name, err as Error);
       throw err;
     }
+
+    // THE window that used to orphan processes: a Ctrl-C during a long
+    // `pnpm install` pre_start hook finished teardown while the hook was
+    // still running, then the spawn below fired into the void.
+    if (cancelled()) throw new StartupAbortedError(name);
 
     this.applyEvent(name, { kind: 'start' });
     this.emit('process:starting', name);
@@ -395,6 +527,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // Fail fast with a clear error instead.
     const endpoint = readyCheckLocalEndpoint(handle.config.ready);
     if (endpoint && !(await isPortFree(endpoint.port, endpoint.host))) {
+      if (cancelled()) throw new StartupAbortedError(name);
       const err = new Error(
         `port ${endpoint.port} is already in use — another process is bound to it ` +
           `(the ready check would falsely succeed against the existing listener). ` +
@@ -404,15 +537,17 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       this.emit('process:failed', name, err);
       throw err;
     }
+    // Last guard before the point of no return: never spawn into a teardown.
+    if (cancelled()) throw new StartupAbortedError(name);
 
     const runner = new Runner(name, handle.config);
     handle.runner = runner;
-    handle.shutdown = new AbortController();
     handle.startedAt = Date.now();
 
     runner.on('line', (text, stream) => this.handleLine(name, text, stream));
     runner.on('kill', (signal) => this.emit('process:killed', name, signal));
     runner.on('port_freed', (port, pid) => this.emit('process:port-freed', name, port, pid));
+    runner.on('escaped', () => this.emit('process:escaped', name));
     runner.once('error', (err) => this.emit('process:failed', name, err));
 
     const ready = handle.config.ready;
@@ -421,17 +556,21 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // Do not install the global exit-handler here — we await the exit inline.
     if (ready?.type === 'exit-code') {
       runner.start();
+      this.announceSpawn(name, runner);
       const code = await new Promise<number | null>((resolve) => {
         runner.once('exit', (c) => resolve(c));
       });
       handle.runner = null;
       if (code !== 0) {
+        // Killed by shutdown/restart (stopOne stopped the runner): not a
+        // failure. stopOne's post-await fix-up transitions stopping → stopped.
+        if (cancelled()) throw new StartupAbortedError(name);
         this.applyEvent(name, { kind: 'fail' });
         this.emit('process:failed', name, new Error(`exited with code ${code}`));
         throw new Error(`process "${name}" exited with code ${code}`);
       }
       this.markReadyAndFinished(name);
-      await this.runHookSafe(name, 'post_start');
+      await this.runHookSafe(name, 'post_start', abort.signal);
       return;
     }
 
@@ -439,10 +578,11 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     // exits (during health check or later) flow through one place.
     runner.once('exit', (code, signal) => this.handleExit(name, code, signal));
     runner.start();
+    this.announceSpawn(name, runner);
 
     if (!ready) {
       this.markReadyAndRunning(name);
-      await this.runHookSafe(name, 'post_start');
+      await this.runHookSafe(name, 'post_start', abort.signal);
       return;
     }
 
@@ -455,11 +595,20 @@ export class Orckit extends EventEmitter<OrckitEvents> {
         );
       });
       await Promise.race([
-        waitForReady(probe, { signal: handle.shutdown.signal }),
+        waitForReady(probe, { signal: abort.signal }),
         exitDuringHealth,
       ]);
+      // The probe may report ready in the same tick a stop lands; never
+      // continue a cancelled startup into markReadyAndRunning (it would be an
+      // illegal stopping → ready transition and leave the child untracked).
+      if (cancelled()) throw new StartupAbortedError(name);
     } catch (err) {
       if (runner.running) await runner.stop();
+      if (cancelled()) {
+        // Cancelled by shutdown/restart — not a failure. stopOne() owns the
+        // state transitions (stop-requested before, stopped after the exit).
+        throw err instanceof StartupAbortedError ? err : new StartupAbortedError(name);
+      }
       // handleExit (if it fired) will already have transitioned to failed; otherwise do it here.
       if (handle.state !== 'failed') {
         this.applyEvent(name, { kind: 'fail' });
@@ -471,7 +620,12 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     }
 
     this.markReadyAndRunning(name);
-    await this.runHookSafe(name, 'post_start');
+    await this.runHookSafe(name, 'post_start', abort.signal);
+  }
+
+  private announceSpawn(name: string, runner: Runner): void {
+    const pid = runner.pid;
+    if (pid != null) this.emit('process:spawned', name, pid, runner.config.command);
   }
 
   private markReadyAndRunning(name: string): void {
@@ -496,24 +650,53 @@ export class Orckit extends EventEmitter<OrckitEvents> {
 
   private async stopOne(name: string): Promise<void> {
     const handle = this.requireHandle(name);
-    if (!isActive(handle.state)) return;
 
-    await this.runHookSafe(name, 'pre_stop');
+    if (!isActive(handle.state)) {
+      // Not (yet) running — but a startup may be in flight (state `pending`
+      // while its pre_start hook runs). Abort it and wait for it to unwind so
+      // the hook subprocess is killed and the spawn behind it can never fire.
+      handle.shutdown?.abort();
+      if (handle.startup) await handle.startup.catch(() => {});
+      // An earlier attempt may still have left a container behind (a process
+      // that reached `failed` after `docker run` created one). The container is
+      // owned by the daemon, so it outlives us and keeps its ports bound.
+      await removeDockerContainer(handle.config);
+      return;
+    }
+
+    // A failing/timing-out pre_stop hook must never block the actual kill —
+    // otherwise one bad hook aborts the whole teardown and orphans everything
+    // still inside its grace window. `runHookSafe` already emits hook:failed.
+    await this.runHookSafe(name, 'pre_stop').catch(() => {});
 
     this.applyEvent(name, { kind: 'stop-requested' });
     handle.stoppingAt = Date.now();
     this.emit('process:stopping', name);
     handle.shutdown?.abort();
     if (handle.runner?.running) {
-      await handle.runner.stop();
+      await handle.runner.stop(handle.config.stop_grace_ms);
     }
-    // exit handler fires applyEvent('exited', expected=true)
+    // Wait for any in-flight startup (health wait, exit-code wait) to unwind —
+    // its catch path may still be stopping the runner (Runner.stop is
+    // single-flight, so this never doubles the teardown).
+    if (handle.startup) await handle.startup.catch(() => {});
+    // exit handler fires applyEvent('exited', expected=true). Exit-code
+    // startups install no exit handler, so a process killed while awaiting its
+    // one-shot exit would stay stuck in `stopping` — settle it here.
+    if (handle.state === 'stopping') {
+      handle.runner = null;
+      handle.probe = null;
+      this.applyEvent(name, { kind: 'exited', expected: true, code: null });
+      const stopMs = handle.stoppingAt != null ? Date.now() - handle.stoppingAt : undefined;
+      handle.stoppingAt = null;
+      this.emit('process:stopped', name, stopMs);
+    }
     // For `type: docker`, the local `docker run` CLI we just signalled doesn't
     // own the container — force-remove it so its published ports are freed for
     // the next boot, regardless of whether the process stopped gracefully or
     // was SIGKILLed. No-op for every other process type.
     await removeDockerContainer(handle.config);
-    await this.runHookSafe(name, 'post_stop');
+    await this.runHookSafe(name, 'post_stop').catch(() => {});
     await this.sweepOrphanPorts(name);
   }
 
@@ -529,7 +712,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     const handle = this.handles.get(name);
     if (!handle?.config.kill_orphan_ports) return;
     const ports = new Set(handle.config.ports);
-    if (handle.config.ready?.type === 'tcp') ports.add(handle.config.ready.port);
+    const endpoint = readyCheckLocalEndpoint(handle.config.ready);
+    if (endpoint) ports.add(endpoint.port);
     if (ports.size === 0) return;
     const freed = await killPortHolders([...ports]);
     for (const { port, pid } of freed) this.emit('process:port-freed', name, port, pid);
@@ -552,7 +736,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     void signal;
     const handle = this.handles.get(name);
     if (!handle) return;
-    const expected = handle.state === 'stopping' || this.stopping;
+    const expected = handle.state === 'stopping' || this.stopping || this.disposed;
     handle.runner = null;
     handle.probe = null;
     this.applyEvent(name, { kind: 'exited', expected, code });
@@ -569,7 +753,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
   }
 
   private async maybeRestart(name: string): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping || this.disposed) return;
     const handle = this.handles.get(name);
     if (!handle) return;
     const policy = handle.config.restart;
@@ -590,6 +774,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       return;
     }
     handle.restartAbort = null;
+    // A stop may have landed while the delay ran (or in the same tick the
+    // abort would have fired) — never respawn into a teardown.
+    if (this.stopping || this.disposed) return;
 
     try {
       await this.spawnAndAwaitReady(name);
@@ -599,7 +786,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     }
   }
 
-  private async runHookSafe(name: string, hook: HookKind): Promise<void> {
+  private async runHookSafe(name: string, hook: HookKind, cancelSignal?: AbortSignal): Promise<void> {
     const handle = this.handles.get(name);
     if (!handle?.config.hooks?.[hook]) return;
     this.emit('hook:start', name, hook);
@@ -608,6 +795,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
         cwd: handle.config.cwd,
         env: handle.config.env,
         timeoutMs: handle.config.hook_timeout_ms,
+        cancelSignal,
         onLine: (text, stream) => this.emit('hook:line', name, hook, text, stream),
       });
       this.emit('hook:complete', name, hook);
@@ -636,6 +824,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       parser: getParser(config.type),
       retries: 0,
       shutdown: null,
+      startup: null,
       restartAbort: null,
       startedAt: null,
       stoppingAt: null,

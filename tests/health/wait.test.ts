@@ -47,4 +47,29 @@ describe('waitForReady', () => {
     setTimeout(() => controller.abort(), 100);
     await expect(waitForReady(probe, { signal: controller.signal })).rejects.toThrow(/abort/);
   });
+
+  it('rejects when the abort lands mid-check, even if that check then reports ready', async () => {
+    // The shutdown race: a stop lands while a probe is already in flight and the
+    // probe comes back ok. Without the post-await re-check the cancelled startup
+    // would continue into "ready" for a process that is being torn down.
+    const controller = new AbortController();
+    const attempts: number[] = [];
+    const probe: HealthProbe = {
+      intervalMs: 10,
+      timeoutMs: 5000,
+      async check() {
+        controller.abort(); // the stop lands *during* the check
+        await new Promise((r) => setTimeout(r, 20));
+        return { ok: true };
+      },
+    };
+    await expect(
+      waitForReady(probe, {
+        signal: controller.signal,
+        onAttempt: (attempt) => attempts.push(attempt),
+      }),
+    ).rejects.toThrow(/abort/);
+    // The cancelled attempt must not even be reported as an attempt.
+    expect(attempts).toEqual([]);
+  });
 });

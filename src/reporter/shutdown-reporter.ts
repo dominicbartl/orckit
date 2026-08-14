@@ -35,6 +35,9 @@ export function attachShutdownReporter(
   // Processes that needed a SIGKILL — so the final `stopped` line can flag that
   // it didn't come down cleanly.
   const forced = new Set<string>();
+  // Processes whose tree could not be proven reaped (see `process:escaped`) —
+  // the one outcome the user must not read as a clean stop.
+  const escaped = new Set<string>();
 
   const pipe = (name: string, marker: string, text: string) =>
     out(`      ${chalk.dim(name)} ${marker} ${text}`);
@@ -76,8 +79,26 @@ export function attachShutdownReporter(
       `  ${chalk.yellow('⚑')} ${chalk.bold(name)} ${chalk.yellow(`freed port ${port}`)} ${chalk.dim(`(killed orphan pid ${pid})`)}`,
     );
 
+  const onEscaped = (name: string) => {
+    escaped.add(name);
+    out(
+      `  ${chalk.red('⚠')} ${chalk.bold(name)} ${chalk.red('a child escaped the process group and may still be running')}`,
+    );
+    out(
+      chalk.dim(
+        `      (declare this process's \`ports\` with \`kill_orphan_ports: true\` to reap it by port)`,
+      ),
+    );
+  };
+
   const onStopped = (name: string, durationMs?: number) => {
     const took = durationMs != null ? chalk.dim(` (${formatDuration(durationMs)})`) : '';
+    if (escaped.has(name)) {
+      out(
+        `  ${chalk.red('✓')} ${chalk.bold(name)} ${chalk.red('stopped (children may remain)')}${took}`,
+      );
+      return;
+    }
     if (forced.has(name)) {
       out(`  ${chalk.yellow('✓')} ${chalk.bold(name)} ${chalk.yellow('stopped (forced)')}${took}`);
     } else {
@@ -92,6 +113,7 @@ export function attachShutdownReporter(
   orckit.on('hook:failed', onHookFailed);
   orckit.on('process:killed', onKilled);
   orckit.on('process:port-freed', onPortFreed);
+  orckit.on('process:escaped', onEscaped);
   orckit.on('process:stopped', onStopped);
 
   return () => {
@@ -102,6 +124,7 @@ export function attachShutdownReporter(
     orckit.off('hook:failed', onHookFailed);
     orckit.off('process:killed', onKilled);
     orckit.off('process:port-freed', onPortFreed);
+    orckit.off('process:escaped', onEscaped);
     orckit.off('process:stopped', onStopped);
   };
 }

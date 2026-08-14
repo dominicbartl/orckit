@@ -88,9 +88,77 @@ npx orc start --show-output     # stream stdout/stderr to the terminal above the
 npx orc start --no-live         # disable the persistent dashboard (plain line-by-line output)
 npx orc start --mcp-port 7700   # override the YAML mcp.port
 npx orc start --no-mcp          # force-disable the built-in MCP server
+npx orc start --kill-blocked-ports    # free required ports without asking
+npx orc start --fail-on-blocked-ports # abort if a required port is taken
 ```
 
-Ctrl-C triggers graceful shutdown (SIGTERM → 10s grace → SIGKILL).
+Ctrl-C triggers graceful shutdown (SIGTERM → per-process `stop_grace_ms`, default 10s → SIGKILL).
+
+## Shutdown and orphaned processes
+
+Every process is spawned in its own process group, and orckit signals the whole
+group on teardown — so `pnpm → node → java` trees come down together instead of
+leaving grandchildren reparented to init. Because the children are detached they
+never see the terminal's Ctrl-C directly: **orckit's teardown is the only thing
+that stops them**, and it is built to run in every exit path.
+
+- **Ctrl-C at any point during boot** cancels the startup that's in flight —
+  including a long `pre_start` hook — and nothing spawns behind it.
+- **A second Ctrl-C** force-kills every remaining process group immediately
+  (and removes `type: docker` containers) instead of waiting out grace windows.
+- **SIGHUP** (you closed the terminal) tears down exactly like Ctrl-C.
+- **A crash** (uncaught exception, unhandled rejection) runs a synchronous kill
+  sweep before exiting, so a bug in orckit can't strand your dev environment.
+- **A failing `pre_stop` / `post_stop` hook** no longer blocks the teardown of
+  anything else — the kill path runs regardless.
+- After teardown, orckit verifies the process's declared `ports` were actually
+  released when `kill_orphan_ports` is set, and reports `process:escaped` in the
+  rare case a descendant survived.
+
+### Recovering from a force-quit
+
+The one exit orckit cannot handle from the inside is being `SIGKILL`ed itself —
+force quit, the OOM killer, `kill -9`. No handler runs, so the detached process
+groups simply keep going. To make that recoverable, orckit maintains
+`.orckit/session.json` (next to your config) listing the process groups it
+spawned, and deletes it on a clean exit. Its presence at boot therefore means
+"the previous session died badly", and the next `orc start` reports the
+survivors and offers to kill them, using the same rules as blocked ports:
+
+```
+  a previous orckit session did not shut down cleanly — 3 process(es) from it are still running
+    api-build (pid 41121)  pnpm build:watch
+    webapp (pid 41196)  pnpm exec ng serve
+    emulators (pid 41469)  pnpm exec firebase emulators:start
+    kill them? [Y/n]
+```
+
+A recorded PID is only ever killed when the process still running under it
+matches the command that was recorded — a recycled PID is left alone. If another
+`orc start` is alive and owns the file, its processes aren't treated as orphans.
+
+### Blocked ports at boot
+
+Before anything spawns, orckit checks every port the boot needs — `http`/`tcp`
+ready-check endpoints, each process's declared `ports`, and its own MCP/web
+ports — and reports what is already listening (pid, start time, command):
+
+```
+  1 required port(s) already in use
+
+  port 4200 — needed by process "webapp", held by:
+    pid 51234 (since Thu Aug 14 09:12:03 2026)  node .../ng serve
+    kill it? [Y/n]
+```
+
+On a TTY it asks (default yes). Otherwise, and with no flags, it aborts rather
+than killing something unattended. Use `--kill-blocked-ports` to always kill, or
+`--fail-on-blocked-ports` to always abort (the two are mutually exclusive). The
+holder gets a SIGTERM with a generous grace period first — if it's a stale
+`orc start`, that lets it tear down its own children — and only then a SIGKILL.
+A port held by a container platform's proxy (Docker Desktop, OrbStack, colima)
+is never killed: orckit tells you to remove the container publishing it, because
+killing that pid would hit the VM manager instead of the workload.
 
 ## Live dashboard
 
@@ -227,6 +295,11 @@ processes:
                              # Bump for slow pre_start installs (e.g. a cold
                              # `pnpm install` of Angular/Next can exceed a minute).
 
+    stop_grace_ms: 10000     # ms to wait after SIGTERM before escalating to
+                             # SIGKILL; default 10000. Raise it for anything that
+                             # must flush on shutdown (a database checkpointing,
+                             # a cache being written) where SIGKILL costs work.
+
     output:
       suppress: ['^node_modules', 'webpack-dev-middleware']  # regex; matches are dropped
       include: ['^ERROR']                                    # regex; ONLY matches are kept (if set)
@@ -268,6 +341,11 @@ For processes with a `type: tcp` or `type: http` ready check pointing at a local
 ```
 
 The check is automatic and limited to TCP/HTTP probes on `localhost` / `127.0.0.1` / `0.0.0.0` / `::1`. If you intentionally want a probe to target something not owned by the process (rare), use `type: custom` or `type: log-pattern` instead.
+
+This is the per-process backstop. The blocked-port check described in
+[Shutdown and orphaned processes](#blocked-ports-at-boot) runs earlier — before
+anything spawns, across every port the whole boot needs — and can free them for
+you rather than just failing.
 
 ## Per-process log files
 
@@ -347,13 +425,15 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `preflight:result` | `PreflightResult` |
 | `preflight:complete` | `allPassed: boolean` |
 | `process:state` | `name`, `ProcessState` |
-| `process:starting` | `name` |
+| `process:starting` | `name` — about to spawn (the subprocess does not exist yet) |
+| `process:spawned` | `name`, `pid`, `command` — the subprocess exists; `pid` is also its process-group id |
 | `process:ready` | `name`, `durationMs` — long-running process passed its health check (not emitted for `ready: exit-code`) |
 | `process:running` | `name` — long-running process is now in operational state |
 | `process:finished` | `name`, `durationMs` — one-shot (`ready: exit-code`) completed successfully |
 | `process:stopping` | `name` — graceful stop has begun (SIGTERM sent / `stop_command` run) |
 | `process:killed` | `name`, `signal` — a termination signal was sent; `SIGTERM` on graceful stop, `SIGKILL` if the grace window expired and the process had to be force-killed |
 | `process:port-freed` | `name`, `port`, `pid` — an orphan still holding one of the process's `ports` was force-killed by the post-stop sweep (`kill_orphan_ports`) |
+| `process:escaped` | `name` — a descendant escaped the process group and survived the SIGKILL of the tree, so teardown could not prove it was reaped. Rare; usually fixed by declaring `ports` with `kill_orphan_ports: true` |
 | `process:stopped` | `name`, `durationMs?` — process has exited; duration is how long the stop took |
 | `process:failed` | `name`, `Error?` |
 | `process:restarting` | `name`, `attempt` |
