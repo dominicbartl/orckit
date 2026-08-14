@@ -96,11 +96,23 @@ Ctrl-C triggers graceful shutdown (SIGTERM → per-process `stop_grace_ms`, defa
 
 ## Shutdown and orphaned processes
 
-Every process is spawned in its own process group, and orckit signals the whole
-group on teardown — so `pnpm → node → java` trees come down together instead of
-leaving grandchildren reparented to init. Because the children are detached they
-never see the terminal's Ctrl-C directly: **orckit's teardown is the only thing
-that stops them**, and it is built to run in every exit path.
+Every process is spawned in its own process group. On teardown orckit takes a
+snapshot of the process's **entire descendant tree first**, then signals every
+process group in it — not just the root's. Both halves matter:
+
+- Snapshotting *before* signalling is what makes escaped children reachable.
+  Kill the parent first and its children instantly reparent to init, so a
+  `ppid`-based walk done afterwards finds nothing and they survive forever.
+- Signalling *every group in the tree* covers wrapper scripts that run
+  `set -m` (bash monitor mode, extremely common in dev scripts) or `setsid`.
+  Those put each job in its own process group that `kill(-pid)` never reaches —
+  which is how `firebase emulators`, `docker run &` and `stripe listen` used to
+  outlive a shutdown.
+
+After the direct child exits, orckit verifies every process in that snapshot is
+actually gone and escalates on the ones that aren't. Because the children are
+detached they never see the terminal's Ctrl-C directly: **orckit's teardown is
+the only thing that stops them**, and it is built to run in every exit path.
 
 - **Ctrl-C at any point during boot** cancels the startup that's in flight —
   including a long `pre_start` hook — and nothing spawns behind it.
@@ -120,22 +132,28 @@ that stops them**, and it is built to run in every exit path.
 The one exit orckit cannot handle from the inside is being `SIGKILL`ed itself —
 force quit, the OOM killer, `kill -9`. No handler runs, so the detached process
 groups simply keep going. To make that recoverable, orckit maintains
-`.orckit/session.json` (next to your config) listing the process groups it
-spawned, and deletes it on a clean exit. Its presence at boot therefore means
-"the previous session died badly", and the next `orc start` reports the
-survivors and offers to kill them, using the same rules as blocked ports:
+`.orckit/session.json` (next to your config) listing the processes it spawned
+*and their descendants* (re-walked every 15s), and deletes it on a clean exit.
+Its presence at boot therefore means "the previous session died badly", and the
+next `orc start` reports the survivors and offers to kill them, using the same
+rules as blocked ports:
 
 ```
-  a previous orckit session did not shut down cleanly — 3 process(es) from it are still running
-    api-build (pid 41121)  pnpm build:watch
-    webapp (pid 41196)  pnpm exec ng serve
-    emulators (pid 41469)  pnpm exec firebase emulators:start
+  a previous orckit session did not shut down cleanly — 3 process(es) from it are still running (17 including their children)
+    webapp (pid 41196) +1 child   pnpm exec ng serve
+    templates (pid 41240) +8 children  pnpm templates:start
+    emulators (pid 41469) +9 children  pnpm exec firebase emulators:start
     kill them? [Y/n]
 ```
 
-A recorded PID is only ever killed when the process still running under it
-matches the command that was recorded — a recycled PID is left alone. If another
-`orc start` is alive and owns the file, its processes aren't treated as orphans.
+Descendants are tracked, not just the processes orckit spawned directly,
+because the ones that actually strand themselves are usually grandchildren — a
+Firebase functions runtime, an `ng serve` worker — which reparent to init the
+moment their intermediate parent dies and are then unreachable from the root
+PID. A recorded PID is only ever killed when the process still running under it
+matches the command that was recorded, so a recycled PID is left alone. If
+another `orc start` is alive and owns the file, its processes aren't treated as
+orphans.
 
 ### Blocked ports at boot
 

@@ -100,12 +100,25 @@ export {
   clearSession,
   findSurvivors,
   killSurvivor,
+  survivorSize,
   commandsMatch,
   isAlive,
   sessionFilePath,
   type SessionRecord,
   type SessionFile,
 } from './util/session-state.js';
+export {
+  collectProcessTree,
+  collectProcessTreeSync,
+  snapshotAll,
+  treeFrom,
+  detailedTreeFrom,
+  mergeTrees,
+  signalTree,
+  survivors,
+  type ProcessTree,
+  type PsRow,
+} from './util/process-tree.js';
 export {
   attachDashboard,
   type DashboardOptions,

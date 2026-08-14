@@ -21,6 +21,7 @@ import {
   isAlive,
   killSurvivor,
   readSession,
+  survivorSize,
 } from './util/session-state.js';
 import { attachCliReporter, printFailureDump, renderStatus } from './reporter/cli-reporter.js';
 import { attachShutdownReporter } from './reporter/shutdown-reporter.js';
@@ -588,14 +589,20 @@ async function reapPreviousSession(
     return;
   }
 
+  const liveCount = survivors.reduce((n, s) => n + survivorSize(s), 0);
   console.log(
     chalk.yellow(
       `\n  a previous orckit session did not shut down cleanly — ` +
-        `${survivors.length} process(es) from it are still running`,
+        `${survivors.length} process(es) from it are still running` +
+        (liveCount > survivors.length ? ` (${liveCount} including their children)` : ''),
     ),
   );
   for (const s of survivors) {
-    console.log(`    ${chalk.bold(s.name)} ${chalk.dim(`(pid ${s.pid})`)}  ${s.command}`);
+    const extra = survivorSize(s) - 1;
+    const withKids = extra > 0 ? chalk.dim(` +${extra} child${extra === 1 ? '' : 'ren'}`) : '';
+    console.log(
+      `    ${chalk.bold(s.name)} ${chalk.dim(`(pid ${s.pid})`)}${withKids}  ${s.command}`,
+    );
   }
 
   if (mode === 'fail') {

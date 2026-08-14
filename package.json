@@ -64,7 +64,6 @@
     "commander": "^14.0.1",
     "execa": "^9.6.0",
     "js-yaml": "^4.1.0",
-    "tree-kill": "^1.2.2",
     "zod": "^4.1.12"
   },
   "devDependencies": {

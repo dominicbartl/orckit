@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { collectProcessTree, mergeTrees, signalTree, survivors } from './process-tree.js';
 
 /**
  * One process orckit spawned, persisted so a LATER `orc start` can find it if
@@ -19,6 +20,17 @@ export interface SessionRecord {
   pgid: number;
   /** The command line as spawned; used to guard against PID reuse. */
   command: string;
+  /**
+   * The process's descendants at the last refresh, each with the command it was
+   * running. Recorded because the processes that actually strand themselves are
+   * usually *grandchildren* — a Firebase functions runtime, an `ng serve`
+   * worker — which reparent to init when their intermediate parent dies and are
+   * then unreachable from `pid` alone. Commands are stored so a recycled PID is
+   * never mistaken for a survivor.
+   */
+  members?: Array<{ pid: number; command: string }>;
+  /** Process groups seen in the tree (a `set -m` script leads its own). */
+  pgids?: number[];
 }
 
 export interface SessionFile {
@@ -98,15 +110,29 @@ function currentCommand(pid: number): Promise<string | null> {
  * recycled pid running something else is dropped.
  */
 export async function findSurvivors(session: SessionFile): Promise<SessionRecord[]> {
-  const survivors: SessionRecord[] = [];
+  const found: SessionRecord[] = [];
   for (const record of session.processes) {
-    if (!isAlive(record.pid)) continue;
-    const live = await currentCommand(record.pid);
-    if (live == null) continue;
-    if (!commandsMatch(record.command, live)) continue;
-    survivors.push(record);
+    // A record counts as surviving when EITHER its own process is still there
+    // or any of its recorded descendants is — the common real-world case is the
+    // direct child being gone while an escaped grandchild keeps running (and
+    // keeps a port bound).
+    const live: Array<{ pid: number; command: string }> = [];
+    for (const member of [{ pid: record.pid, command: record.command }, ...(record.members ?? [])]) {
+      if (live.some((m) => m.pid === member.pid)) continue;
+      if (!isAlive(member.pid)) continue;
+      const current = await currentCommand(member.pid);
+      if (current == null || !commandsMatch(member.command, current)) continue;
+      live.push(member);
+    }
+    if (live.length === 0) continue;
+    found.push({ ...record, members: live });
   }
-  return survivors;
+  return found;
+}
+
+/** How many live processes a survivor record actually covers. */
+export function survivorSize(record: SessionRecord): number {
+  return Math.max(1, record.members?.length ?? 1);
 }
 
 /**
@@ -127,30 +153,26 @@ export function commandsMatch(recorded: string, live: string): boolean {
  * `graceMs`. Returns true when the group is gone.
  */
 export async function killSurvivor(record: SessionRecord, graceMs = 5000): Promise<boolean> {
-  const signalGroup = (signal: NodeJS.Signals) => {
-    try {
-      process.kill(-record.pgid, signal);
-    } catch {
-      // group already gone
-    }
-    try {
-      process.kill(record.pid, signal);
-    } catch {
-      // process already gone
-    }
-  };
+  // Three sources, because no single one is sufficient: a live `ppid` walk
+  // (covers anything spawned since the last refresh), the recorded members
+  // (covers descendants that reparented to init and are no longer reachable
+  // from the root), and the recorded root/pgid itself.
+  const tree = mergeTrees(await collectProcessTree(record.pid), {
+    pids: [record.pid, ...(record.members ?? []).map((m) => m.pid)],
+    pgids: [record.pgid, ...(record.pgids ?? [])],
+  });
 
-  signalGroup('SIGTERM');
+  signalTree(tree, 'SIGTERM');
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (!isAlive(record.pid)) return true;
+    if (survivors(tree).length === 0) return true;
     await new Promise((r) => setTimeout(r, 150));
   }
-  signalGroup('SIGKILL');
+  signalTree(tree, 'SIGKILL');
   const killDeadline = Date.now() + 1500;
   while (Date.now() < killDeadline) {
-    if (!isAlive(record.pid)) return true;
+    if (survivors(tree).length === 0) return true;
     await new Promise((r) => setTimeout(r, 100));
   }
-  return !isAlive(record.pid);
+  return survivors(tree).length === 0;
 }

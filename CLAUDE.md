@@ -88,6 +88,10 @@ src/
 
   util/
     env.ts            # mergeEnv (process.env + extras)
+    process-tree.ts   # snapshot-BEFORE-signal teardown primitives:
+                      # collectProcessTree (+Sync), signalTree, survivors.
+                      # Signals every pgid in the tree, not just the root's —
+                      # `set -m` wrapper scripts lead their own groups.
     port.ts           # isPortFree, findPortHolders (LISTEN only),
                       # describePortHolders (pid/command/start time), freePort
                       # (SIGTERM → grace → SIGKILL), killPortHolders
@@ -147,6 +151,20 @@ running ──(SIGTERM/SIGKILL via dispose)────────────�
 Children are spawned `detached`, so they never receive the terminal's Ctrl-C —
 **orckit's teardown is the only thing that can stop them**, and every exit path
 must run it. The rules that keep this true:
+
+- **Snapshot before you signal** (`util/process-tree.ts`). `Runner.stop()`
+  collects the full descendant tree *first*, then signals. Killing first and
+  walking `ppid` afterwards (what `tree-kill` did) loses every escaped subtree:
+  the parent dies, its children reparent to init, and the walk returns nothing.
+  The snapshot is also retained on the runner (`lastTree`) because the emergency
+  path runs *after* a graceful stop has already killed the intermediate parents.
+- **Signal every pgid in the tree, not just the root's.** A wrapper script with
+  `set -m` (bash monitor mode) puts each job in its own process group, so
+  `kill(-rootPgid)` misses it entirely. This is why `firebase emulators`,
+  `docker run &` and `stripe listen` behind `pnpm <script>` used to survive.
+- **Verify, don't assume.** After the direct child exits, `reapSurvivors()`
+  checks the snapshot and escalates on anything still alive; only if something
+  outlives even that does it emit `process:escaped`.
 
 - `spawnAndAwaitReady` is cancellable at *every* await point. Each attempt owns
   an `AbortController` (`handle.shutdown`) created **before** the first await, so

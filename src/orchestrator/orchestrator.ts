@@ -111,6 +111,12 @@ interface Handle {
   state: ProcessState;
   config: ProcessConfig;
   runner: Runner | null;
+  /**
+   * The most recent runner, retained after `runner` is cleared on exit. Only
+   * for the emergency kill sweep, which must still be able to reach a tree
+   * whose direct child has exited but whose escaped descendants have not.
+   */
+  lastRunner: Runner | null;
   probe: HealthProbe | null;
   buffer: OutputBuffer;
   parser: LineParser | null;
@@ -392,19 +398,12 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     for (const handle of this.handles.values()) {
       handle.restartAbort?.abort();
       handle.shutdown?.abort();
-      const pid = handle.runner?.pid;
-      if (pid != null && handle.runner?.running) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // group already gone
-        }
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // process already gone
-        }
-      }
+      // Delegate to the runner: it knows the tree it snapshotted before
+      // signalling, which is the only way to reach descendants whose parents a
+      // graceful stop already killed. `lastRunner` (not `runner`) because the
+      // exit handler clears `runner` as soon as the direct child dies, while
+      // its escaped descendants can still be alive.
+      handle.lastRunner?.emergencyKill();
       // Containers are owned by the daemon: killing the `docker run` client
       // does not stop them, so they'd survive with their ports bound.
       removeDockerContainerSync(handle.config);
@@ -542,6 +541,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
 
     const runner = new Runner(name, handle.config);
     handle.runner = runner;
+    handle.lastRunner = runner;
     handle.startedAt = Date.now();
 
     runner.on('line', (text, stream) => this.handleLine(name, text, stream));
@@ -819,6 +819,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       state: 'pending',
       config,
       runner: null,
+      lastRunner: null,
       probe: null,
       buffer: new OutputBuffer(config.buffer_size, config.output),
       parser: getParser(config.type),

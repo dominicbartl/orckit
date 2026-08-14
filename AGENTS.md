@@ -172,7 +172,9 @@ After the normal stop path completes, orckit checks each port and force-kills wh
 - A local `tcp`/`http` ready-check port is swept automatically — don't repeat it in `ports`.
 - Only **listeners** are killed; a process that merely holds a client connection to the port is left alone.
 
-Don't reach for this by default. Plain `node`/`python`/`docker` processes come down cleanly with SIGTERM (and `type: docker` already frees its ports via `docker rm -f`). It's specifically for fork-heavy, port-holding tools that leak.
+Don't reach for this by default. Orckit's normal teardown snapshots the whole descendant tree before signalling and signals every process group in it, so even `set -m` wrapper scripts and JVM emulators come down. `kill_orphan_ports` is the last-resort check for a tool that still manages to leak.
+
+**Do declare `ports` even without `kill_orphan_ports`.** They feed the pre-boot blocked-port check, which is what turns "a leftover process from yesterday silently holds this port" into a prompt at startup. Any process that binds a well-known port is worth listing.
 
 ## `output` filters
 
@@ -238,8 +240,10 @@ Set `command` to match the user's IDE if it isn't WebStorm. If a user says click
 5. `restart` policy matches the process's nature (long-running vs one-shot).
 6. `manual_retry: true` only on processes whose failure means "external thing isn't ready" — not on regular services.
 7. Plain `docker run --name X` processes use `type: docker` + `container_name: X` (not `type: bash` + manual `stop_command`). The `container_name` must match the `--name=` in `command`. Validation now rejects the `type: bash` form outright.
-8. Anything that must flush on shutdown (databases, caches) has a `stop_grace_ms` large enough to finish — the default is 10s, after which orckit escalates to SIGKILL.
-9. No secrets in `env`.
+8. Anything that must flush on shutdown (databases, caches) has a `stop_grace_ms` large enough to finish — the default is 10s, after which orckit escalates to SIGKILL. `firebase emulators:start` in particular stops its emulators in sequence and regularly needs more.
+9. A process whose `command` is a wrapper script (`pnpm foo` → `./scripts/foo`) that runs `docker run --name X` inside still needs `type: docker` + `container_name: X` — validation can only see the command string, so it cannot catch this one for you. Without it the container outlives the shutdown and keeps its ports bound.
+10. Hooks that "clean up a port" must never kill the holder of a *published container port* — that is the container platform's proxy (Docker Desktop, OrbStack), and killing it takes down the whole Docker daemon without freeing the port. Remove the container instead, or let `type: docker` do it.
+11. No secrets in `env`.
 
 ## Programmatic API
 

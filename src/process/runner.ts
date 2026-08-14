@@ -1,7 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { execa, type ResultPromise } from 'execa';
-import treeKill from 'tree-kill';
 import type { ProcessConfig } from '../config/schema.js';
+import {
+  collectProcessTree,
+  collectProcessTreeSync,
+  mergeTrees,
+  signalTree,
+  survivors,
+  type ProcessTree,
+} from '../util/process-tree.js';
 import { readyCheckLocalEndpoint } from '../health/checks.js';
 import { mergeEnv } from '../util/env.js';
 import { bindLineStream } from '../util/line-stream.js';
@@ -46,10 +53,25 @@ const DEFAULT_GRACE_MS = 10_000;
  */
 const SIGKILL_REAP_MS = 2_000;
 
+/**
+ * How long a process that escaped the tree gets to honor the post-stop SIGTERM
+ * before it is force-killed. Short on purpose: by this point the process is
+ * already meant to be gone, and its parent is dead.
+ */
+const SURVIVOR_GRACE_MS = 2_000;
+
 export class Runner extends EventEmitter<RunnerEvents> {
   private process: ResultPromise | null = null;
   private exited = false;
   private stopPromise: Promise<void> | null = null;
+  /**
+   * The descendant tree captured by the most recent `stop()`. Retained because
+   * a graceful stop kills the intermediate parents first: once they are gone,
+   * an escaped grandchild has reparented to init and a fresh `ppid` walk can no
+   * longer find it. The emergency path (double Ctrl-C, crash) needs this
+   * remembered set to finish the job.
+   */
+  private lastTree: ProcessTree | null = null;
   private _exitCode: number | null = null;
   private _exitSignal: NodeJS.Signals | null = null;
 
@@ -150,16 +172,26 @@ export class Runner extends EventEmitter<RunnerEvents> {
       this.process = null;
       return;
     }
+    // Capture the whole descendant tree BEFORE signalling anything. Killing
+    // first and walking `ppid` afterwards loses every escaped subtree: the
+    // parent dies, its children reparent to init, and the walk comes back
+    // empty. Snapshotting first also picks up the separate process groups that
+    // `set -m` wrapper scripts create, which a single kill(-pgid) never
+    // reaches. This is what makes `firebase emulators` / `docker run &` /
+    // `stripe listen` under a bash script actually come down.
+    let tree = await collectProcessTree(pid);
+    this.lastTree = tree;
+
     const finished = this.awaitExit();
     if (this.config.stop_command) {
-      // Custom stop verb (e.g. `docker stop <name>`) — fire and forget; we only
+      // Custom stop verb (e.g. `docker compose down`) — fire and forget; we only
       // care that it triggers a graceful exit of the main process. Any stderr
       // is surfaced through the runner's normal line stream so the user sees
       // it in the failure-tail dump on errors.
       this.runStopCommand(this.config.stop_command);
     } else {
       this.emit('kill', 'SIGTERM');
-      killTree(pid, 'SIGTERM');
+      signalTree(tree, 'SIGTERM');
     }
     const winner = await Promise.race([
       finished.then(() => 'exit' as const),
@@ -167,13 +199,13 @@ export class Runner extends EventEmitter<RunnerEvents> {
     ]);
     if (winner === 'timeout' && !this.exited) {
       this.emit('kill', 'SIGKILL');
-      killTree(pid, 'SIGKILL');
+      tree = mergeTrees(tree, await collectProcessTree(pid));
+      this.lastTree = tree;
+      signalTree(tree, 'SIGKILL');
       // SIGKILL is unblockable, so anything we can reach is now dead — but execa
       // only settles its promise once every stdout/stderr pipe has hit EOF. A
-      // child that escaped into its own process group (e.g. a `set -m`
-      // background job) can survive our group/tree kill AND keep the inherited
-      // pipe open, so `finished` would never resolve and shutdown would hang
-      // forever. Wait a short bounded window for a clean settle, then force it.
+      // child holding the inherited pipe open would leave `finished` unresolved
+      // and hang shutdown forever. Wait a bounded window, then force it.
       const settled = await Promise.race([
         finished.then(() => true),
         delay(SIGKILL_REAP_MS).then(() => false),
@@ -181,7 +213,53 @@ export class Runner extends EventEmitter<RunnerEvents> {
       if (!settled && !this.exited) this.forceExit();
     }
     this.process = null;
+    // The direct child exiting does NOT mean its tree is gone: anything that
+    // escaped into its own process group keeps running, and until now that was
+    // reported as a clean stop. Verify, and escalate on whatever is left.
+    await this.reapSurvivors(tree);
     await this.sweepOrphanPorts();
+  }
+
+  /**
+   * Post-stop verification: confirm every process we snapshotted is actually
+   * gone, and escalate on the ones that aren't (SIGTERM, brief grace, SIGKILL).
+   * Emits `escaped` only if something outlives even that — the one case where
+   * teardown genuinely cannot prove a reaped tree.
+   */
+  private async reapSurvivors(tree: ProcessTree): Promise<void> {
+    let alive = survivors(tree);
+    if (alive.length === 0) return;
+
+    signalTree({ pids: alive, pgids: [] }, 'SIGTERM');
+    const deadline = Date.now() + SURVIVOR_GRACE_MS;
+    while (Date.now() < deadline) {
+      await delay(150);
+      alive = survivors(tree);
+      if (alive.length === 0) return;
+    }
+
+    signalTree({ pids: alive, pgids: [] }, 'SIGKILL');
+    await delay(300);
+    if (survivors(tree).length > 0) this.emit('escaped');
+  }
+
+  /**
+   * Synchronous, unconditional SIGKILL of everything this runner spawned, for
+   * the emergency paths (double Ctrl-C, uncaughtException) that must finish
+   * before `process.exit()`.
+   *
+   * Signals the union of a fresh snapshot and the tree remembered from an
+   * in-flight `stop()`: the fresh one covers a crash during normal operation,
+   * the remembered one covers a force-quit *during* a graceful shutdown, where
+   * the intermediate parents are already dead and the survivors have reparented
+   * out of reach.
+   */
+  emergencyKill(): void {
+    const pid = this.process?.pid;
+    let tree: ProcessTree = this.lastTree ?? { pids: [], pgids: [] };
+    if (pid != null) tree = mergeTrees(tree, collectProcessTreeSync(pid));
+    if (tree.pids.length === 0) return;
+    signalTree(tree, 'SIGKILL');
   }
 
   /**
@@ -247,22 +325,6 @@ export class Runner extends EventEmitter<RunnerEvents> {
     if (this.exited) return Promise.resolve();
     return new Promise((resolve) => this.once('exit', () => resolve()));
   }
-}
-
-function killTree(pid: number, signal: NodeJS.Signals): void {
-  // Primary: signal the whole process group. The child was spawned `detached`,
-  // so its pid is also its process-group id; `kill(-pid)` hits every process in
-  // that group atomically, including descendants that reparented away from the
-  // child. This is what actually frees held ports (firestore, auth, ng serve)
-  // on shutdown.
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    // Group already gone (ESRCH) or not permitted — fall through to tree-kill.
-  }
-  // Fallback: catch anything that escaped the group by starting its own session
-  // (rare, but some tools call setsid). Best-effort; ignore errors.
-  treeKill(pid, signal, () => {});
 }
 
 function delay(ms: number): Promise<void> {
