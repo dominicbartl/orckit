@@ -102,7 +102,7 @@ When stdout is a TTY, `orc start` pins a persistent dashboard to the bottom of t
 
 Preflight banners, failure tails (the recent stdout/stderr dump after a process dies), and `--show-output` lines print *above* the dashboard so they stay in scrollback while the live region keeps tracking state below them.
 
-The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your IDE via the Toolbox `jetbrains://` URL scheme. Configure it with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
+The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your already-running IDE. The browser can't open an IDE itself, so clicking POSTs to orckit, which opens the file: paths **inside the project root** (the `.idea` directory) open in your IDE via its **command-line launcher** (`webstorm --line 42 …`); paths **outside it** — temp files, generated artifacts like `/var/folders/…/mailer/x.html` — open in the OS **default application** instead. Paths are resolved to absolute against each process's working directory, so monorepo subdirectories resolve correctly. This needs no JetBrains Toolbox and no plugin — just the launcher on `PATH` (create it via the IDE's **Tools → "Create Command-Line Launcher"**). A missing/dead file or an unreachable launcher surfaces as a toast. Configure the launcher with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
 
 Pass `--no-live` to skip the dashboard entirely and get plain line-by-line lifecycle output plus the REPL.
 
@@ -125,15 +125,15 @@ ide:                         # optional; on by default. Deep-links file refs in
   enabled: true              # default: true. When a `.idea` folder is found at
                              #   or above the config, file references like
                              #   `src/app.ts:42:10` in the dashboard become
-                             #   clickable `jetbrains://` links that open the
-                             #   file at the line in your running IDE. No `.idea`
-                             #   → no links. Has no effect on the terminal UI.
-  tool: webstorm             # default: webstorm. Which JetBrains IDE the links
-                             #   target — a `.idea` folder can't tell them apart.
-                             #   One of: webstorm, intellij, pycharm, phpstorm,
-                             #   goland, rubymine, clion, rider, rustrover, datagrip
-  project: my-project        # optional; override the IDE project name. Defaults
-                             #   to `.idea/.name` or the project folder's basename.
+                             #   clickable. Clicking POSTs to orckit, which runs
+                             #   the IDE's command-line launcher to open the file
+                             #   at that line in your already-running IDE. No
+                             #   Toolbox or plugin needed. No `.idea` → no links;
+                             #   no effect on the terminal UI.
+  command: webstorm          # default: webstorm. The IDE's command-line launcher
+                             #   (`idea`, `pycharm`, `phpstorm`, `goland`, …).
+                             #   Create it via the IDE's Tools → "Create
+                             #   Command-Line Launcher", or set the full path.
 
 preflight:                   # optional pre-startup checks (run in parallel)
   - name: docker-up

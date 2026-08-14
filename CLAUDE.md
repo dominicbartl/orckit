@@ -79,9 +79,10 @@ src/
     snapshot.ts       # buildSnapshot — serializable view of Orckit state
     static.ts         # serveStaticAsset + resolveStaticDir for the SPA shell
     ide.ts            # detectIde — finds a .idea folder at/above the config and
-                      # resolves a JetBrains Toolbox toolTag + project name into
-                      # an IdeLink (in the snapshot) so the web UI can deep-link
-                      # file references via the jetbrains:// URL scheme
+                      # returns an IdeLink { command, root } (in the snapshot).
+                      # The web UI's file links POST to /api/open, which opens
+                      # files under `root` in that IDE launcher and files outside
+                      # it in the OS default app (no plugin/Toolbox)
 
   util/
     env.ts            # mergeEnv (process.env + extras)
@@ -174,8 +175,9 @@ Anything that needs a richer view than `inspect(name)` / `states()` / `output(na
 - **`GET /api/state` + `GET /api/output/:name`** — initial-hydration snapshots over JSON
 - **`GET /events`** — SSE stream of orckit events, beginning with a full snapshot for reconnect tolerance
 - **`POST /api/restart/:name` + `POST /api/stop/:name`** — action endpoints calling `orckit.restart()` / `orckit.stop()` directly
+- **`POST /api/open?file=&line=&column=`** — opens a file: under the project root via the configured IDE launcher (`ide.command`), outside it via the OS default app; 404s a non-existent file. Only meaningful when an `ide` was detected
 
-The snapshot also carries an `ide: IdeLink | null` field. The CLI resolves it once at start (`detectIde` over the config's directory, gated on the `ide:` config block) and passes it to `attachWebUi`; the server echoes it into every snapshot. The frontend's `lib/ide.ts` turns file references in output (`src/app.ts:42:10`, `foo.ts(12,3)`, stack-trace frames) into `jetbrains://` deep links, rendered by the `LinkedText` component used in the log view and the Errors panel. Relative refs are resolved against the emitting process's working directory (each `ProcessSnapshot.cwd`, the absolute dir the Runner spawned it in) before being made relative to the IDE project root — a process with `cwd: packages/api` that logs `src/x.ts` links to `packages/api/src/x.ts`. Absolute refs are relativized against `ide.root` directly. No `.idea` → `ide` is null → `LinkedText` renders plain text. Path parsing is a pure function with no test harness on the frontend side; the `/sink` page's "IDE deep links" fixture is the visual regression surface — keep it in sync.
+The snapshot also carries an `ide: IdeLink | null` field (just `{ command }`, the IDE's CLI launcher). The CLI resolves it once at start (`detectIde` over the config's directory, gated on the `ide:` config block) and passes it to `attachWebUi`; the server echoes it into every snapshot. The frontend's `lib/ide.ts` parses file references in output (`src/app.ts:42:10`, `foo.ts(12,3)`, stack-trace frames) into segments, resolving each to an **absolute** path against the emitting process's working directory (each `ProcessSnapshot.cwd`, the absolute dir the Runner spawned it in) — a process with `cwd: /repo/packages/api` that logs `src/x.ts` resolves to `/repo/packages/api/src/x.ts`. The `LinkedText` component (used in the log view and the Errors panel) renders those as clickable spans; a click POSTs `/api/open?file=&line=&column=` to orckit. The server stats the file (404 if gone), then routes by `isUnderRoot(file, ide.root)`: under the project root → `ide.command --line N --column C <abs-file>` (args array, no shell); outside it → the OS default opener (`open` / `xdg-open` / `cmd /c start`), so temp files and generated artifacts don't hijack the IDE. The browser can't shell out itself, so this server round-trip is the mechanism; being same-origin, the POST returns a real status, so `LinkedText` toasts accurately on failure. This deliberately avoids the Toolbox `jetbrains://` scheme (needs Toolbox installed — a standalone IDE yields macOS error -600) and the built-in HTTP server's `/api/file` (needs the "IDE Remote Control" plugin since 2024.2). No `.idea` → `ide` is null → `LinkedText` renders plain text. Path parsing is a pure function with no test harness on the frontend side; the `/sink` page's "IDE deep links" fixture is the visual regression surface — keep it in sync.
 
 The frontend lives in **`packages/web-ui/`** (a pnpm workspace, `@orckit/web-ui`, private, not published). It's SolidJS + Vite + Tailwind v4. Build it with `pnpm build:web` from the root; the static assets get copied into the cli package's tarball so end users get one `npm i @orckit/cli` without needing to run two build systems.
 

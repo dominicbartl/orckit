@@ -169,10 +169,7 @@ program
         // Detect a JetBrains project so the dashboard can deep-link file
         // references in logs/errors. Search from the config file's directory.
         const ide = config.ide.enabled
-          ? detectIde(dirname(resolve(opts.config)), {
-              tool: config.ide.tool,
-              project: config.ide.project,
-            })
+          ? detectIde(dirname(resolve(opts.config)), { command: config.ide.command })
           : null;
         try {
           webServer = await attachWebUi(orckit, {
@@ -182,7 +179,7 @@ program
           });
           // Web dashboard is the headline action surface — show it first.
           links.unshift({ label: 'web', value: webServer.url });
-          if (ide) links.push({ label: 'ide', value: `${ide.toolTag} · ${ide.project}` });
+          if (ide) links.push({ label: 'ide', value: `file links open via \`${ide.command}\`` });
         } catch (err) {
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
           console.error(

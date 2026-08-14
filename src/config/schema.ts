@@ -222,37 +222,23 @@ const webConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
 });
 
-/**
- * Friendly names for the JetBrains IDE to deep-link into. A `.idea` folder is
- * shared across every JetBrains IDE and can't tell them apart, so this picks
- * which one the web UI's file links open. Defaults to WebStorm — orckit's
- * primary audience is JS/TS devs.
- */
-const ideToolSchema = z.enum([
-  'webstorm',
-  'intellij',
-  'pycharm',
-  'phpstorm',
-  'goland',
-  'rubymine',
-  'clion',
-  'rider',
-  'rustrover',
-  'datagrip',
-]);
-
 const ideConfigSchema = z.object({
   /**
    * When true, `orc start` looks for a `.idea` folder at/above the config and,
    * if found, makes file references in the web dashboard's logs and errors
-   * clickable — they open the file at the line in your running JetBrains IDE
-   * via the Toolbox `jetbrains://` URL scheme. No `.idea` → no links.
+   * clickable. Clicking POSTs to orckit, which runs the IDE's command-line
+   * launcher (`command` below) to open the file at the line in your already-
+   * running JetBrains IDE. No Toolbox or plugin required. No `.idea` → no links.
    */
   enabled: z.boolean().default(true),
-  /** Which JetBrains IDE the links target (`.idea` can't disambiguate). */
-  tool: ideToolSchema.default('webstorm'),
-  /** Override the IDE project name (otherwise derived from `.idea`/folder). */
-  project: z.string().optional(),
+  /**
+   * The IDE's command-line launcher, used to open files (`<command> --line N
+   * --column C <file>`). Default `webstorm`. Set it to your IDE's launcher
+   * (`idea`, `pycharm`, `phpstorm`, `goland`, …) — create it via the IDE's
+   * Tools → "Create Command-Line Launcher" (or point at the full path). orckit
+   * runs it as the user that launched `orc start`.
+   */
+  command: z.string().min(1).default('webstorm'),
 });
 
 export const orckitConfigSchema = z
@@ -265,7 +251,7 @@ export const orckitConfigSchema = z
     logs: logsConfigSchema.default({ enabled: false, dir: '.orckit/logs' }),
     mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
     web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
-    ide: ideConfigSchema.default({ enabled: true, tool: 'webstorm' }),
+    ide: ideConfigSchema.default({ enabled: true, command: 'webstorm' }),
   })
   .superRefine((data, ctx) => {
     // A required process can't depend on an optional one — if `optional: true`
@@ -303,4 +289,3 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type WebConfig = z.infer<typeof webConfigSchema>;
 export type IdeConfig = z.infer<typeof ideConfigSchema>;
-export type IdeTool = z.infer<typeof ideToolSchema>;

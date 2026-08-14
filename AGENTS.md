@@ -200,16 +200,16 @@ Do **not** enable it just because you can — for short-lived dev sessions, the 
 
 ## `ide` (top-level, optional)
 
-On by default; you rarely need to touch it. When a `.idea` folder exists at or above the config, the web dashboard turns file references in logs/errors (`src/app.ts:42:10`) into clickable `jetbrains://` deep links that open the file at the line in the user's JetBrains IDE. No `.idea` → no links; it never affects orchestration or the terminal UI.
+On by default; you rarely need to touch it. When a `.idea` folder exists at or above the config, the web dashboard turns file references in logs/errors (`src/app.ts:42:10`) into clickable links. Clicking POSTs to orckit's `/api/open`, which makes the path absolute against the process's `cwd` and then routes: files **inside the project root** (the `.idea` dir) open in the IDE via its command-line launcher (`<command> --line N --column C <abs-file>`); files **outside it** (temp files, generated artifacts) open in the OS default app; missing files error. No Toolbox, no plugin. No `.idea` → no links; never affects orchestration or the terminal UI.
 
 ```yaml
 ide:
-  tool: webstorm   # default; a `.idea` folder can't tell JetBrains IDEs apart.
-                   # Set when the user's IDE isn't WebStorm: intellij, pycharm,
-                   # phpstorm, goland, rubymine, clion, rider, rustrover, datagrip.
+  command: webstorm   # default; the IDE's CLI launcher. Set to idea / pycharm /
+                      # phpstorm / goland / … to match the user's IDE.
+  # enabled: false    # disable the links entirely
 ```
 
-Only add this block to **change the target IDE** (`tool:`), override the IDE project name (`project:`), or disable the links (`enabled: false`). Leaving it out gives WebStorm links when a `.idea` folder is present, which is the right default for JS/TS projects.
+Set `command` to match the user's IDE if it isn't WebStorm. If a user says clicks don't open anything, the usual fix is creating the launcher (IDE → Tools → "Create Command-Line Launcher") so `command` is on `PATH` — not a different config.
 
 ## Environment and secrets
 

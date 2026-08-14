@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import { validateConfig } from '../../src/config/load.js';
-import { attachWebUi, type WebUiServerHandle } from '../../src/web/server.js';
+import {
+  attachWebUi,
+  defaultOpenCommand,
+  isUnderRoot,
+  type WebUiServerHandle,
+} from '../../src/web/server.js';
 
 describe('attachWebUi over HTTP', () => {
   let orckit: Orckit;
@@ -236,5 +244,103 @@ describe('attachWebUi over HTTP', () => {
     expect(orckit.listenerCount('process:failed')).toBe(before + 1);
     await second.dispose();
     expect(orckit.listenerCount('process:failed')).toBe(before);
+  });
+
+  it('POST /api/open returns 400 when IDE linking is disabled', async () => {
+    // This server was attached without an `ide` option.
+    const res = await fetch(`${server.url}/api/open?file=/tmp/x.ts`, { method: 'POST' });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/disabled/);
+  });
+});
+
+describe('isUnderRoot / defaultOpenCommand', () => {
+  it('isUnderRoot: true for the root itself and files inside it', () => {
+    expect(isUnderRoot('/repo', '/repo')).toBe(true);
+    expect(isUnderRoot('/repo/src/a.ts', '/repo')).toBe(true);
+    expect(isUnderRoot('/repo/packages/api/src/a.ts', '/repo')).toBe(true);
+  });
+
+  it('isUnderRoot: false for paths outside the root', () => {
+    expect(isUnderRoot('/var/folders/tmp/mail.html', '/repo')).toBe(false);
+    expect(isUnderRoot('/repo-sibling/a.ts', '/repo')).toBe(false);
+    expect(isUnderRoot('/a.ts', '/repo')).toBe(false);
+  });
+
+  it('defaultOpenCommand: per-platform opener', () => {
+    expect(defaultOpenCommand('darwin', '/f.html')).toEqual(['open', ['/f.html']]);
+    expect(defaultOpenCommand('linux', '/f.html')).toEqual(['xdg-open', ['/f.html']]);
+    expect(defaultOpenCommand('win32', 'C:\\f.html')).toEqual([
+      'cmd',
+      ['/c', 'start', '', 'C:\\f.html'],
+    ]);
+  });
+});
+
+describe('attachWebUi /api/open (IDE configured)', () => {
+  let orckit: Orckit;
+  let server: WebUiServerHandle;
+  let root: string;
+  let fileInProject: string;
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'orckit-open-'));
+    fileInProject = join(root, 'src', 'a.ts');
+    mkdirSync(dirname(fileInProject), { recursive: true });
+    writeFileSync(fileInProject, '// test\n');
+
+    const config = validateConfig({
+      project: 'ide-test',
+      processes: { api: { command: 'sleep 1', restart: 'never' } },
+    });
+    orckit = new Orckit(config);
+    // `true` is a harmless POSIX no-op launcher stand-in that ignores its args.
+    server = await attachWebUi(orckit, { port: 0, ide: { command: 'true', root } });
+  });
+
+  afterEach(async () => {
+    await server.dispose();
+    await orckit.dispose();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('runs the IDE launcher for an existing file inside the project root', async () => {
+    const url = `${server.url}/api/open?file=${encodeURIComponent(fileInProject)}&line=42&column=7`;
+    const res = await fetch(url, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { ok: boolean; openedWith: string };
+    expect(json.ok).toBe(true);
+    expect(json.openedWith).toBe('true');
+  });
+
+  it('rejects a non-absolute file with 400', async () => {
+    const res = await fetch(`${server.url}/api/open?file=src/x.ts`, { method: 'POST' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/absolute/);
+  });
+
+  it('returns 404 for a file that does not exist', async () => {
+    const missing = join(root, 'nope.ts');
+    const res = await fetch(`${server.url}/api/open?file=${encodeURIComponent(missing)}`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toMatch(/not found/);
+  });
+
+  it('returns 502 when the IDE launcher cannot be run', async () => {
+    const bogus = await attachWebUi(orckit, {
+      port: 0,
+      ide: { command: 'orckit-no-such-launcher-xyz', root },
+    });
+    try {
+      const url = `${bogus.url}/api/open?file=${encodeURIComponent(fileInProject)}`;
+      const res = await fetch(url, { method: 'POST' });
+      expect(res.status).toBe(502);
+      expect(((await res.json()) as { error: string }).error).toMatch(/couldn't open with/);
+    } finally {
+      await bogus.dispose();
+    }
   });
 });

@@ -84,6 +84,13 @@ const SAMPLE_LINES: OutputLine[] = [
     timestamp: Date.now() - 1498,
   },
   {
+    // Absolute path outside the project root — links, but opens in the OS
+    // default app (not the IDE). Email address is left untouched.
+    text: 'Sending mail to dominic@acme.com, /var/folders/b8/T/mailer/0513b62f.html',
+    stream: 'stdout',
+    timestamp: Date.now() - 1450,
+  },
+  {
     text: 'POST /api/billing/checkout 500 in 5012ms',
     stream: 'stdout',
     timestamp: Date.now() - 1400,
@@ -92,12 +99,9 @@ const SAMPLE_LINES: OutputLine[] = [
 ];
 
 // Stand-in for a detected JetBrains project so the log view can demonstrate
-// `jetbrains://` deep links on file references like `lib/redis/connect.ts:42:18`.
-const SAMPLE_IDE: IdeLink = {
-  toolTag: 'web-storm',
-  project: 'acme-web',
-  root: '/Users/dev/acme-web',
-};
+// IDE deep links on file references like `lib/redis/connect.ts:42:18`.
+const SAMPLE_IDE: IdeLink = { command: 'webstorm', root: '/Users/dev/acme-web' };
+const SAMPLE_CWD = '/Users/dev/acme-web/packages/api';
 
 const SAMPLE_PROCESSES: ProcessSnapshot[] = [
   {
@@ -404,14 +408,10 @@ export default function Sink() {
 
         <Section
           title="Log view — IDE deep links"
-          subtitle="When a JetBrains project is detected, file refs (e.g. lib/redis/connect.ts:42:18) become jetbrains:// links. Relative refs are resolved against the process's cwd — here packages/api — so the link points at packages/api/lib/redis/connect.ts."
+          subtitle="When a JetBrains project is detected, file refs (e.g. lib/redis/connect.ts:42:18) become clickable — orckit opens them in your running IDE via its command-line launcher. Relative refs resolve against the process's cwd (here /Users/dev/acme-web/packages/api) into an absolute path."
         >
           <div class="h-64">
-            <LogView
-              lines={() => SAMPLE_LINES}
-              ide={SAMPLE_IDE}
-              baseDir={`${SAMPLE_IDE.root}/packages/api`}
-            />
+            <LogView lines={() => SAMPLE_LINES} ide={SAMPLE_IDE} baseDir={SAMPLE_CWD} />
           </div>
         </Section>
 

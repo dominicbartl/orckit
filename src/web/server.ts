@@ -4,6 +4,9 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
 import type { Orckit } from '../orchestrator/orchestrator.js';
 import { trackBuilds } from '../process/build-tracker.js';
 import { buildSnapshot, recentOutput } from './snapshot.js';
@@ -18,7 +21,7 @@ export interface WebUiServerOptions {
   host?: string;
   /**
    * IDE deep-link descriptor. When set, file references in the dashboard's
-   * logs and errors become `jetbrains://` links. Null/undefined disables it.
+   * logs and errors become IDE deep links (built-in server). Null disables it.
    */
   ide?: IdeLink | null;
 }
@@ -145,6 +148,40 @@ export async function attachWebUi(
       return;
     }
 
+    // Open a file in the user's IDE via its command-line launcher. The browser
+    // can't shell out, so it POSTs here and orckit runs the launcher. Params:
+    // ?file=<absolute>&line=<n>&column=<n>.
+    if (method === 'POST' && path === '/api/open') {
+      if (!ide) {
+        sendJson(res, 400, { error: 'IDE linking is disabled (no .idea / ide.enabled: false)' });
+        return;
+      }
+      const params = new URL(url, 'http://localhost').searchParams;
+      const file = params.get('file');
+      const line = params.get('line');
+      const column = params.get('column');
+      if (!file || !isAbsolute(file)) {
+        sendJson(res, 400, { error: 'file query param must be an absolute path' });
+        return;
+      }
+      if (!existsSync(file)) {
+        sendJson(res, 404, { error: `file not found: ${file}` });
+        return;
+      }
+      // Files inside the IDE project root open in the IDE; anything else (temp
+      // files, paths outside the project) opens in the OS default application.
+      const inProject = isUnderRoot(file, ide.root);
+      try {
+        if (inProject) await openInIde(ide.command, file, line, column);
+        else await openWithDefaultApp(file);
+        sendJson(res, 200, { ok: true, openedWith: inProject ? ide.command : 'default app' });
+      } catch (err) {
+        const what = inProject ? `IDE launcher "${ide.command}"` : 'the default application';
+        sendJson(res, 502, { error: `couldn't open with ${what}: ${(err as Error).message}` });
+      }
+      return;
+    }
+
     // CORS for the Vite dev server (port 5174) hitting the live orckit during
     // frontend development. In production both are same-origin so this is a
     // no-op for browser-served pages.
@@ -242,6 +279,67 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader('content-type', 'application/json');
   res.setHeader('access-control-allow-origin', '*');
   res.end(JSON.stringify(body));
+}
+
+/**
+ * Open a file in the user's IDE by running its command-line launcher detached:
+ *   <command> [--line N] [--column C] <file>
+ * Args are passed as an array (no shell), so the browser-supplied `file` can't
+ * inject a command.
+ */
+function openInIde(
+  command: string,
+  file: string,
+  line: string | null,
+  column: string | null,
+): Promise<void> {
+  const args: string[] = [];
+  if (line && /^\d+$/.test(line)) args.push('--line', line);
+  if (column && /^\d+$/.test(column)) args.push('--column', column);
+  args.push(file);
+  return spawnDetached(command, args);
+}
+
+/** Open a file in the OS default application (for files outside the project). */
+function openWithDefaultApp(file: string): Promise<void> {
+  const [command, args] = defaultOpenCommand(process.platform, file);
+  return spawnDetached(command, args);
+}
+
+/**
+ * The OS default-open command + args for a file. Exposed for unit testing.
+ *   - macOS:   `open <file>`
+ *   - Windows: `cmd /c start "" <file>`  (empty title arg avoids quoting issues)
+ *   - other:   `xdg-open <file>`
+ */
+export function defaultOpenCommand(platform: NodeJS.Platform, file: string): [string, string[]] {
+  if (platform === 'darwin') return ['open', [file]];
+  if (platform === 'win32') return ['cmd', ['/c', 'start', '', file]];
+  return ['xdg-open', [file]];
+}
+
+/**
+ * True when `file` is the project `root` or sits inside it. Pure path math.
+ * Exposed for unit testing.
+ */
+export function isUnderRoot(file: string, root: string): boolean {
+  const rel = relative(root, file);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
+ * Spawn a detached child, resolving once it has spawned and rejecting if it
+ * couldn't be launched (e.g. ENOENT — not on PATH).
+ */
+function spawnDetached(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 function listen(server: HttpServer, port: number, host: string): Promise<void> {

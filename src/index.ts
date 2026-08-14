@@ -30,7 +30,6 @@ export type {
   McpConfig,
   WebConfig,
   IdeConfig,
-  IdeTool,
 } from './config/schema.js';
 
 export {

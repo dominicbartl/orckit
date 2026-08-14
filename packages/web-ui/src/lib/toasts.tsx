@@ -47,3 +47,12 @@ export function useToasts(): ToastApi {
   if (!ctx) throw new Error('useToasts must be called within <ToastProvider>');
   return ctx;
 }
+
+/**
+ * Like {@link useToasts} but returns null instead of throwing when there's no
+ * provider — for components (e.g. LinkedText) that are also rendered outside the
+ * dashboard tree (the `/sink` kitchen sink), where toasting is a no-op.
+ */
+export function useToastsOptional(): ToastApi | null {
+  return useContext(Ctx);
+}

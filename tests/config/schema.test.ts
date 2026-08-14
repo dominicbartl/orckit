@@ -292,31 +292,30 @@ describe('orckitConfigSchema', () => {
 
   it('applies ide defaults when block is omitted', () => {
     const parsed = orckitConfigSchema.parse({ processes: { a: { command: 'echo' } } });
-    expect(parsed.ide).toEqual({ enabled: true, tool: 'webstorm' });
+    expect(parsed.ide).toEqual({ enabled: true, command: 'webstorm' });
   });
 
-  it('ide.tool override keeps enabled default', () => {
+  it('ide.command override keeps enabled default', () => {
     const parsed = orckitConfigSchema.parse({
       processes: { a: { command: 'echo' } },
-      ide: { tool: 'pycharm' },
+      ide: { command: 'idea' },
     });
-    expect(parsed.ide).toEqual({ enabled: true, tool: 'pycharm' });
+    expect(parsed.ide).toEqual({ enabled: true, command: 'idea' });
   });
 
-  it('honors ide.enabled: false and ide.project override', () => {
+  it('honors ide.enabled: false', () => {
     const parsed = orckitConfigSchema.parse({
       processes: { a: { command: 'echo' } },
-      ide: { enabled: false, project: 'my-proj' },
+      ide: { enabled: false },
     });
     expect(parsed.ide.enabled).toBe(false);
-    expect(parsed.ide.project).toBe('my-proj');
   });
 
-  it('rejects an unknown ide.tool', () => {
+  it('rejects an empty ide.command', () => {
     expect(() =>
       orckitConfigSchema.parse({
         processes: { a: { command: 'echo' } },
-        ide: { tool: 'sublime' },
+        ide: { command: '' },
       }),
     ).toThrow();
   });

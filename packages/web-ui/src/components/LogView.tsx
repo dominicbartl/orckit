@@ -21,7 +21,7 @@ interface LogViewProps {
   autoStick?: boolean;
   /** ARIA label / empty hint. */
   emptyHint?: string;
-  /** When set, file references in each line become `jetbrains://` deep links. */
+  /** When set, file references in each line become IDE deep links. */
   ide?: IdeLink | null;
   /** Emitting process's working dir; relative file refs resolve against it. */
   baseDir?: string;

@@ -61,15 +61,15 @@ export interface ProcessSnapshot {
 
 /**
  * Mirror of orckit's `IdeLink` (src/web/ide.ts). Present when a JetBrains
- * project was detected; lets the UI turn file references in output into
- * `jetbrains://` deep links via {@link buildIdeHref}.
+ * project was detected; its mere presence enables linkifying file references.
+ * Clicking POSTs to orckit's `/api/open`, which decides server-side whether to
+ * open the file in the IDE (under `root`) or the OS default app (outside it).
+ * The fields aren't needed by the frontend today — they mirror the wire format.
  */
 export interface IdeLink {
-  /** JetBrains Toolbox toolTag, e.g. `web-storm`. */
-  toolTag: string;
-  /** IDE project name. */
-  project: string;
-  /** Absolute project root, for relativizing absolute paths in output. */
+  /** The IDE's command-line launcher (e.g. `webstorm`). */
+  command: string;
+  /** Absolute project root (the directory containing `.idea`). */
   root: string;
 }
 

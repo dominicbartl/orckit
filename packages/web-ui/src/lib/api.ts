@@ -44,3 +44,19 @@ export async function startProcess(name: string): Promise<void> {
     throw new Error(body.error ?? `start failed: ${res.status}`);
   }
 }
+
+/**
+ * Ask orckit to open a file in the user's IDE (it runs the IDE's command-line
+ * launcher server-side). `file` must be absolute; `line`/`col` are 1-based.
+ * Throws with the server's error message on failure (e.g. launcher not found).
+ */
+export async function openInIde(file: string, line?: number, col?: number): Promise<void> {
+  const params = new URLSearchParams({ file });
+  if (line != null) params.set('line', String(line));
+  if (col != null) params.set('column', String(col));
+  const res = await fetch(`/api/open?${params.toString()}`, { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `open failed: ${res.status}`);
+  }
+}

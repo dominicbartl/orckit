@@ -1,46 +1,26 @@
 import type { IdeLink } from './types';
 
 /**
- * Build a JetBrains Toolbox deep link for a file reference.
+ * Resolve a file reference from process output into an **absolute** path so
+ * orckit's `/api/open` can hand it to the IDE launcher. Resolution:
+ *   - absolute `file` → used as-is
+ *   - relative `file` + `baseDir` (the emitting process's working dir) → joined
+ *     onto `baseDir`
+ *   - relative `file`, no `baseDir` → passed through (best effort)
  *
- *   jetbrains://<toolTag>/navigate/reference?project=<project>&path=<rel>:<line>:<col>
- *
- * `path` is relative to the IDE project root. Resolution:
- *   - absolute `file` → relativized against `ide.root` (passed through if outside)
- *   - relative `file` + `baseDir` (the emitting process's working dir) →
- *     joined onto `baseDir`, then relativized against `ide.root`
- *   - relative `file`, no `baseDir` → passed through (IDE resolves it against
- *     the project base)
- *
- * `baseDir` matters because a process logs paths relative to its OWN `cwd`,
- * which may be a subdirectory of (or differ from) the IDE project root.
+ * `baseDir` matters because a process logs paths relative to its OWN `cwd`.
  */
-export function buildIdeHref(
-  ide: IdeLink,
-  file: string,
-  line?: number,
-  col?: number,
-  baseDir?: string,
-): string {
-  let path = file;
-  if (isAbsolute(file)) {
-    const rel = relativize(file, ide.root);
-    if (rel != null) path = rel;
-  } else if (baseDir) {
-    const abs = joinPath(baseDir, file);
-    path = relativize(abs, ide.root) ?? abs;
-  }
-  let suffix = '';
-  if (line != null) {
-    suffix = `:${line}`;
-    if (col != null) suffix += `:${col}`;
-  }
-  const params = `project=${encodeURIComponent(ide.project)}&path=${encodeURIComponent(path + suffix)}`;
-  return `jetbrains://${ide.toolTag}/navigate/reference?${params}`;
+export function resolveFilePath(file: string, baseDir?: string): string {
+  return isAbsolute(file) ? file : baseDir ? joinPath(baseDir, file) : file;
 }
 
-/** A run of plain text, or a file reference that should render as a link. */
-export type Segment = { kind: 'text'; text: string } | { kind: 'link'; text: string; href: string };
+/**
+ * A run of plain text, or a file reference to render as a link. `file` is the
+ * resolved (absolute, when possible) path; `line`/`col` are 1-based positions.
+ */
+export type Segment =
+  | { kind: 'text'; text: string }
+  | { kind: 'link'; text: string; file: string; line?: number; col?: number };
 
 /**
  * Path-like token: a sequence of path chars containing at least one `/` or a
@@ -57,7 +37,7 @@ const FILE_RE =
  * Split a line of output into plain-text and file-link segments. When `ide` is
  * null nothing is linkified — the whole line is one text segment. `baseDir` is
  * the emitting process's working directory; relative file refs resolve against
- * it (see {@link buildIdeHref}).
+ * it (see {@link resolveFilePath}).
  */
 export function linkifyOutput(text: string, ide: IdeLink | null, baseDir?: string): Segment[] {
   if (!ide || !text) return [{ kind: 'text', text }];
@@ -81,13 +61,9 @@ export function linkifyOutput(text: string, ide: IdeLink | null, baseDir?: strin
     segments.push({
       kind: 'link',
       text: text.slice(matchStart, matchEnd),
-      href: buildIdeHref(
-        ide,
-        file!,
-        line ? Number(line) : undefined,
-        col ? Number(col) : undefined,
-        baseDir,
-      ),
+      file: resolveFilePath(file!, baseDir),
+      line: line ? Number(line) : undefined,
+      col: col ? Number(col) : undefined,
     });
     last = matchEnd;
   }
@@ -116,16 +92,4 @@ function joinPath(base: string, rel: string): string {
     else parts.push(part);
   }
   return parts.join('/');
-}
-
-/** Make `file` relative to `root`, or null if it isn't under `root`. */
-function relativize(file: string, root: string): string | null {
-  const normRoot = root.replace(/[\\/]+$/, '');
-  if (file === normRoot) return '';
-  const withSep = normRoot + '/';
-  if (file.startsWith(withSep)) return file.slice(withSep.length);
-  // Windows backslash separator.
-  const withBackSep = normRoot + '\\';
-  if (file.startsWith(withBackSep)) return file.slice(withBackSep.length).replace(/\\/g, '/');
-  return null;
 }

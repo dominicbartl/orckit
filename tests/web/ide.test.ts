@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { detectIde } from '../../src/web/ide.js';
 
 describe('detectIde', () => {
@@ -23,41 +23,20 @@ describe('detectIde', () => {
     expect(detectIde(root)).toBeNull();
   });
 
-  it('detects a JetBrains project from .idea and defaults to WebStorm', () => {
+  it('detects a JetBrains project from .idea with the default launcher + root', () => {
     mkdirSync(join(root, '.idea'));
-    const link = detectIde(root);
-    expect(link).toEqual({
-      toolTag: 'web-storm',
-      project: basename(root),
-      root,
-    });
+    expect(detectIde(root)).toEqual({ command: 'webstorm', root });
   });
 
-  it('maps the configured tool to its Toolbox toolTag', () => {
+  it('honors a custom launcher command', () => {
     mkdirSync(join(root, '.idea'));
-    expect(detectIde(root, { tool: 'intellij' })?.toolTag).toBe('idea');
-    expect(detectIde(root, { tool: 'phpstorm' })?.toolTag).toBe('php-storm');
-    expect(detectIde(root, { tool: 'rider' })?.toolTag).toBe('rd');
+    expect(detectIde(root, { command: 'idea' })).toEqual({ command: 'idea', root });
   });
 
-  it('prefers .idea/.name over the folder basename', () => {
-    mkdirSync(join(root, '.idea'));
-    writeFileSync(join(root, '.idea', '.name'), 'Custom Project\n');
-    expect(detectIde(root)?.project).toBe('Custom Project');
-  });
-
-  it('honors an explicit project override', () => {
-    mkdirSync(join(root, '.idea'));
-    writeFileSync(join(root, '.idea', '.name'), 'FromFile');
-    expect(detectIde(root, { project: 'override' })?.project).toBe('override');
-  });
-
-  it('walks up from a nested directory to find .idea', () => {
+  it('walks up from a nested directory to find .idea and reports the .idea parent as root', () => {
     mkdirSync(join(root, '.idea'));
     const nested = join(root, 'packages', 'web');
     mkdirSync(nested, { recursive: true });
-    const link = detectIde(nested);
-    expect(link?.root).toBe(root);
-    expect(link?.project).toBe(basename(root));
+    expect(detectIde(nested)).toEqual({ command: 'webstorm', root });
   });
 });
