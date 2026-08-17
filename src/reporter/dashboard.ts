@@ -96,9 +96,9 @@ export function attachDashboard(
     lastLineCount = 0;
   };
 
-  const render = (): string => {
+  const render = (maxLines: number): string[] => {
     const headerLabels = composeHeaderLabels(project, links);
-    const header = brandHeader(headerLabels);
+    const header = brandHeader(headerLabels).split('\n');
 
     const composed = new Map<string, string>();
     for (const name of states.keys()) {
@@ -112,17 +112,25 @@ export function attachDashboard(
       annotations: composed,
     })
       .split('\n')
-      .map((line) => '  ' + line)
-      .join('\n');
-    const footer = renderFooter(states, builds);
+      .map((line) => '  ' + line);
+    const footer = [renderFooter(states, builds)];
 
-    return [header, '', body, '', footer].join('\n');
+    return clampFrame(header, body, footer, maxLines);
   };
 
   const draw = () => {
-    const content = render();
-    const lines = content.split('\n');
-    if (lines[lines.length - 1] === '') lines.pop();
+    // The live region is redrawn in place with cursor-up + clear-line, which can
+    // only reach lines still inside the viewport. If we ever emit more lines than
+    // the terminal is tall, the overflowed top rows scroll into scrollback where
+    // clear() can never reach them, and every later redraw strands another copy
+    // there — the "brand header printed N times" bug. Clamp the frame to the
+    // terminal height (leaving one row for the cursor's resting line) so the
+    // whole region always stays reachable. A stream with no `rows` (tests, pipes)
+    // gets no clamp.
+    const rows = stream.rows;
+    const budget = typeof rows === 'number' && rows > 1 ? rows - 1 : Number.POSITIVE_INFINITY;
+    const lines = render(budget);
+    while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
     const text = lines.map((l) => l + '\n').join('');
     stream.write(text);
     lastLineCount = lines.length;
@@ -275,6 +283,40 @@ export function attachDashboard(
       orckit.off('process:build', onBuild);
     },
   };
+}
+
+/**
+ * Assemble the dashboard frame — brand header, dependency graph, counter footer —
+ * into at most `maxLines` visual rows.
+ *
+ * The persistent live region is cleared with cursor-up + clear-line, which only
+ * reaches rows still inside the viewport, so a frame taller than the terminal
+ * would leak its top rows into scrollback on every redraw. When the full frame
+ * doesn't fit we keep the header and footer (the brand mark and the ready/failed
+ * counter) and truncate the graph in the middle with a `… N more` marker. On a
+ * terminal too short for even that, we fall back to the bottom `maxLines` rows —
+ * the footer and the tail of the graph — which still fits and never leaks.
+ */
+function clampFrame(
+  header: string[],
+  body: string[],
+  footer: string[],
+  maxLines: number,
+): string[] {
+  const headerBlock = [...header, ''];
+  const footerBlock = ['', ...footer];
+  const full = [...headerBlock, ...body, ...footerBlock];
+  if (full.length <= maxLines) return full;
+
+  const bodyBudget = maxLines - headerBlock.length - footerBlock.length;
+  // Not even room for the header, one graph row and the footer: show the bottom
+  // of the frame so at least the footer and the last few rows stay visible.
+  if (bodyBudget < 2) return full.slice(full.length - maxLines);
+
+  const shown = body.slice(0, bodyBudget - 1);
+  const hidden = body.length - shown.length;
+  const marker = '  ' + chalk.dim(`… ${hidden} more`);
+  return [...headerBlock, ...shown, marker, ...footerBlock];
 }
 
 function composeHeaderLabels(project: string | undefined, links: DashboardLink[]): string[] {

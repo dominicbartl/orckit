@@ -174,8 +174,17 @@ describe('session file round-trip', () => {
   });
 
   it('never throws when the target is unwritable', () => {
-    expect(() => writeSession('/proc/nonexistent-orckit', session([]))).not.toThrow();
-    expect(() => clearSession('/proc/nonexistent-orckit')).not.toThrow();
+    // Point the session dir *inside* a regular file: `mkdir -p` can't create it
+    // (ENOTDIR), so the write fails — but must fail quietly. This is a portable
+    // stand-in for an unwritable target. Do NOT use a `/proc/...` path here:
+    // Node's recursive `mkdirSync` infinite-loops on procfs (mkdir returns
+    // ENOENT for the child while the `/proc` parent exists, so it spins forever).
+    const dir = scratch();
+    const file = join(dir, 'a-file');
+    writeFileSync(file, 'x');
+    const unwritable = join(file, 'session-dir');
+    expect(() => writeSession(unwritable, session([]))).not.toThrow();
+    expect(() => clearSession(unwritable)).not.toThrow();
   });
 });
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -66,9 +66,25 @@ function baseConfig(overrides: Partial<ProcessConfig> = {}): ProcessConfig {
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  // A process that has been killed but not yet reaped by its (re)parent lingers
+  // as a zombie: it holds no resources and is effectively dead, yet
+  // `process.kill(pid, 0)` still succeeds. When orckit reaps an escaped orphan
+  // that has reparented to init, whether it disappears immediately or briefly
+  // survives as a zombie depends on whether that init reaps promptly — a real
+  // init/systemd does, some minimal container PID 1s don't. Treat a zombie as
+  // dead so "did teardown kill this process" is answered the same way in both.
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    // Format: `pid (comm) state ...`; comm may contain spaces/parens, so read
+    // the state field as the first token after the final ')'.
+    const state = stat.slice(stat.lastIndexOf(')') + 1).trimStart()[0];
+    return state !== 'Z';
+  } catch {
+    // No procfs (e.g. macOS): orphans are reaped immediately, so no zombies.
+    return true;
   }
 }
 

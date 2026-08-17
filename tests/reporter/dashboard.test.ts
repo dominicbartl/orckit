@@ -113,6 +113,41 @@ describe('attachDashboard', () => {
     }
   });
 
+  it('clamps the live region to the terminal height so it never overflows the viewport', () => {
+    // A frame taller than the terminal must never emit more rows than fit: the
+    // in-place cursor-up clear can only reach rows still inside the viewport, so
+    // an overflowing frame strands its top rows in scrollback on every redraw
+    // (the "brand header printed N times" bug). With many processes the graph is
+    // tall; on a short terminal the frame must be clamped, header + footer kept,
+    // and the hidden graph rows summarised with a `… N more` marker.
+    const procs: Record<string, string[]> = {};
+    for (let i = 0; i < 20; i++) procs[`p${i}`] = [];
+    const orckit = fakeOrckit(configWith(procs));
+    const stream = new FakeStream();
+    (stream as { rows?: number }).rows = 10;
+    const handle = attachDashboard(orckit, {
+      stream: stream as unknown as NodeJS.WriteStream,
+      tickMs: 0,
+    })!;
+    try {
+      // Each drawn frame is a single write containing 'orckit'. None may exceed
+      // rows - 1 lines (one row is left for the cursor's resting line).
+      const frames = stream.chunks.filter((c) => c.includes('orckit'));
+      expect(frames.length).toBeGreaterThan(0);
+      for (const f of frames) {
+        const lineCount = (f.match(/\n/g) ?? []).length;
+        expect(lineCount).toBeLessThanOrEqual(9);
+      }
+      // The header (brand mark + counter footer) survives; the graph is truncated.
+      const out = stream.rendered();
+      expect(out).toContain('orckit');
+      expect(out).toMatch(/… \d+ more/);
+      expect(out).toMatch(/0\/20\s+ready/);
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it('redraws with updated state when process events fire', () => {
     const orckit = fakeOrckit(configWith({ db: [] }));
     const stream = new FakeStream();
