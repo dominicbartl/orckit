@@ -5,7 +5,7 @@ import { buildGraph, type DependencyGraph } from '../graph/resolver.js';
 import { renderGraph } from './graph-view.js';
 import { formatDuration } from '../config/duration.js';
 import { brandHeader } from './brand.js';
-import type { BuildEvent } from '../process/parsers.js';
+import { stripAnsi, type BuildEvent } from '../process/parsers.js';
 
 const HIDE_CURSOR = '\x1b[?25l';
 const SHOW_CURSOR = '\x1b[?25h';
@@ -79,7 +79,18 @@ export function attachDashboard(
 
   let frame = 0;
   let disposed = false;
-  let lastLineCount = 0;
+  // Physical terminal rows the last frame occupied — NOT logical lines. A line
+  // wider than the terminal wraps onto several rows, and both the height clamp
+  // and clear() must reason in physical rows or the extra rows escape the
+  // viewport and leak into scrollback (the brand-header duplication bug).
+  let lastRowCount = 0;
+
+  /** How many physical rows a rendered line occupies at the current width. */
+  const rowsFor = (line: string): number => {
+    const cols = stream.columns && stream.columns > 0 ? stream.columns : 80;
+    const width = stripAnsi(line).length;
+    return width === 0 ? 1 : Math.ceil(width / cols);
+  };
 
   const composeAnnotation = (name: string): string => {
     const parts: string[] = [];
@@ -91,12 +102,12 @@ export function attachDashboard(
   };
 
   const clear = () => {
-    if (lastLineCount === 0) return;
-    for (let i = 0; i < lastLineCount; i++) stream.write(UP_AND_CLEAR);
-    lastLineCount = 0;
+    if (lastRowCount === 0) return;
+    for (let i = 0; i < lastRowCount; i++) stream.write(UP_AND_CLEAR);
+    lastRowCount = 0;
   };
 
-  const render = (maxLines: number): string[] => {
+  const render = (maxRows: number): string[] => {
     const headerLabels = composeHeaderLabels(project, links);
     const header = brandHeader(headerLabels).split('\n');
 
@@ -115,25 +126,26 @@ export function attachDashboard(
       .map((line) => '  ' + line);
     const footer = [renderFooter(states, builds)];
 
-    return clampFrame(header, body, footer, maxLines);
+    return clampFrame(header, body, footer, maxRows, rowsFor);
   };
 
   const draw = () => {
     // The live region is redrawn in place with cursor-up + clear-line, which can
-    // only reach lines still inside the viewport. If we ever emit more lines than
+    // only reach rows still inside the viewport. If we ever emit more rows than
     // the terminal is tall, the overflowed top rows scroll into scrollback where
     // clear() can never reach them, and every later redraw strands another copy
     // there — the "brand header printed N times" bug. Clamp the frame to the
     // terminal height (leaving one row for the cursor's resting line) so the
-    // whole region always stays reachable. A stream with no `rows` (tests, pipes)
-    // gets no clamp.
+    // whole region always stays reachable. Budget in PHYSICAL rows so a line
+    // that wraps counts for every row it occupies. A stream with no `rows`
+    // (tests, pipes) gets no clamp.
     const rows = stream.rows;
     const budget = typeof rows === 'number' && rows > 1 ? rows - 1 : Number.POSITIVE_INFINITY;
     const lines = render(budget);
     while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
     const text = lines.map((l) => l + '\n').join('');
     stream.write(text);
-    lastLineCount = lines.length;
+    lastRowCount = lines.reduce((sum, l) => sum + rowsFor(l), 0);
   };
 
   const redraw = () => {
@@ -301,19 +313,41 @@ function clampFrame(
   header: string[],
   body: string[],
   footer: string[],
-  maxLines: number,
+  maxRows: number,
+  rowsFor: (line: string) => number,
 ): string[] {
+  const rowsOf = (lines: string[]): number => lines.reduce((n, l) => n + rowsFor(l), 0);
   const headerBlock = [...header, ''];
   const footerBlock = ['', ...footer];
   const full = [...headerBlock, ...body, ...footerBlock];
-  if (full.length <= maxLines) return full;
+  // Budget in physical rows: a wrapped line costs every row it occupies, so
+  // logical-line counting would let a narrow terminal overflow the viewport.
+  if (rowsOf(full) <= maxRows) return full;
 
-  const bodyBudget = maxLines - headerBlock.length - footerBlock.length;
+  const bodyBudget = maxRows - rowsOf(headerBlock) - rowsOf(footerBlock);
   // Not even room for the header, one graph row and the footer: show the bottom
   // of the frame so at least the footer and the last few rows stay visible.
-  if (bodyBudget < 2) return full.slice(full.length - maxLines);
+  if (bodyBudget < 2) {
+    const tail: string[] = [];
+    let used = 0;
+    for (let i = full.length - 1; i >= 0; i--) {
+      const cost = rowsFor(full[i]!);
+      if (used + cost > maxRows) break;
+      used += cost;
+      tail.unshift(full[i]!);
+    }
+    return tail;
+  }
 
-  const shown = body.slice(0, bodyBudget - 1);
+  // Reserve one row for the `… N more` marker; fill the rest with body rows.
+  const shown: string[] = [];
+  let used = 0;
+  for (const line of body) {
+    const cost = rowsFor(line);
+    if (used + cost > bodyBudget - 1) break;
+    used += cost;
+    shown.push(line);
+  }
   const hidden = body.length - shown.length;
   const marker = '  ' + chalk.dim(`… ${hidden} more`);
   return [...headerBlock, ...shown, marker, ...footerBlock];

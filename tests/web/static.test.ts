@@ -36,7 +36,13 @@ describe('serveStaticAsset', () => {
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    // `fetch` (undici) keeps its socket alive, so a bare `server.close()` blocks
+    // until the keep-alive idle timeout fires — ~3s of dead wait per test (15s
+    // for this file). Force the idle sockets shut so close resolves immediately.
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
     rmSync(root, { recursive: true, force: true });
   });
 

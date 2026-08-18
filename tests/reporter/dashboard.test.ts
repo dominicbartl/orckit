@@ -148,6 +148,47 @@ describe('attachDashboard', () => {
     }
   });
 
+  it('clears every physical row of a wrapped frame so the header does not leak', () => {
+    // A narrow terminal wraps the long header link lines onto extra physical
+    // rows. clear() must erase all of them (not just the logical-line count),
+    // or the top row (`orckit` brand line) accumulates in scrollback on every
+    // redraw — the width-driven twin of the height-overflow duplication bug.
+    const orckit = fakeOrckit(configWith({ db: [] }));
+    const stream = new FakeStream();
+    (stream as unknown as { columns: number }).columns = 20;
+    const handle = attachDashboard(orckit, {
+      stream: stream as unknown as NodeJS.WriteStream,
+      tickMs: 0,
+      links: [
+        { label: 'web', value: 'http://127.0.0.1:7677' },
+        { label: 'mcp', value: 'http://127.0.0.1:7676/mcp' },
+      ],
+    })!;
+    try {
+      // Recover the exact lines the initial frame wrote (draw appends a trailing
+      // newline, so split leaves a spurious empty final element).
+      const frameText = stream.chunks.at(-1)!;
+      const logicalLines = frameText.split('\n').slice(0, -1);
+      const physicalRows = logicalLines.reduce((sum, line) => {
+        const width = stripAnsi(line).length;
+        return sum + (width === 0 ? 1 : Math.ceil(width / 20));
+      }, 0);
+      // Wrapping must actually be in play, else the test proves nothing.
+      expect(physicalRows).toBeGreaterThan(logicalLines.length);
+
+      stream.chunks.length = 0;
+      orckit.emit('process:state', 'db', 'ready'); // triggers a redraw
+
+      // The redraw is clear() then draw(); clear emits one up-and-clear per
+      // physical row of the previous frame.
+      const upAndClear = /\x1b\[F\x1b\[2K/g;
+      const clears = (stream.chunks.join('').match(upAndClear) ?? []).length;
+      expect(clears).toBe(physicalRows);
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it('redraws with updated state when process events fire', () => {
     const orckit = fakeOrckit(configWith({ db: [] }));
     const stream = new FakeStream();
