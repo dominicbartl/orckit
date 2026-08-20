@@ -35,8 +35,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -50,5 +54,9 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      # Published with npm (not pnpm) so the OIDC exchange follows npm's own
+      # reference implementation. Auth comes from the trusted-publisher trust
+      # between this repo/workflow and @orckit/cli — no NPM_TOKEN involved.
+      # Provenance is generated automatically for trusted publishes.
       - name: Publish to npm
-        run: pnpm publish --access public --no-git-checks --provenance
+        run: npm publish --access public
