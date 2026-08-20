@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/dominicbartl/orckit/compare/v0.3.0...v0.3.1) (2026-08-20)
+
+
+### Miscellaneous Chores
+
+* release 0.3.1 ([b6d95bd](https://github.com/dominicbartl/orckit/commit/b6d95bdb7e62b5bed569695fefe28e4479790c31))
+
 ## [0.3.0](https://github.com/dominicbartl/orckit/compare/v0.2.0...v0.3.0) (2026-08-18)
 
 
