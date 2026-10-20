@@ -5,28 +5,35 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   containerName,
-  detectWorktree,
+  detectCheckout,
   dnsLabel,
-  parseWorktree,
+  parseCheckout,
   sandboxDomain,
 } from '../../src/sandbox/worktree.js';
 
-describe('parseWorktree', () => {
-  it('returns null for a main checkout (git dir is the common dir)', () => {
-    expect(parseWorktree('/repo/.git', '/repo/.git', '/repo')).toBeNull();
+describe('parseCheckout', () => {
+  it('names the main checkout `main` (its git dir is the common dir)', () => {
+    expect(parseCheckout('/repo/.git', '/repo/.git', '/repo')).toEqual({
+      id: 'main',
+      root: '/repo',
+      commonDir: '/repo/.git',
+      mainRoot: '/repo',
+      linked: false,
+    });
   });
 
   it('names a linked worktree after its admin dir, not its branch or folder', () => {
-    expect(parseWorktree('/repo/.git/worktrees/brave-a7', '/repo/.git', '/wt/feature')).toEqual({
+    expect(parseCheckout('/repo/.git/worktrees/brave-a7', '/repo/.git', '/wt/feature')).toEqual({
       id: 'brave-a7',
       root: '/wt/feature',
       commonDir: '/repo/.git',
       mainRoot: '/repo',
+      linked: true,
     });
   });
 });
 
-describe('detectWorktree (real git)', () => {
+describe('detectCheckout (real git)', () => {
   let dir: string;
   beforeAll(() => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), 'orckit-wt-')));
@@ -40,18 +47,19 @@ describe('detectWorktree (real git)', () => {
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('is null in the main checkout and outside git', () => {
-    expect(detectWorktree(join(dir, 'main'))).toBeNull();
-    expect(detectWorktree(dir)).toBeNull();
+  it('detects the main checkout, and nothing outside git', () => {
+    expect(detectCheckout(join(dir, 'main'))).toMatchObject({ id: 'main', linked: false });
+    expect(detectCheckout(dir)).toBeNull();
   });
 
   it('detects the worktree from a subdirectory', () => {
-    const wt = detectWorktree(join(dir, 'Feature Tree', 'sub'));
+    const wt = detectCheckout(join(dir, 'Feature Tree', 'sub'));
     expect(wt).toMatchObject({
       id: 'Feature-Tree',
       root: join(dir, 'Feature Tree'),
       commonDir: join(dir, 'main', '.git'),
       mainRoot: join(dir, 'main'),
+      linked: true,
     });
   });
 });

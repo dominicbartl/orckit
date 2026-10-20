@@ -34,7 +34,7 @@ import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
 import { attachDashboard, type DashboardHandle, type DashboardLink } from './reporter/dashboard.js';
 import { buildGraph, filterToTargets } from './graph/resolver.js';
-import { containerName, detectWorktree } from './sandbox/worktree.js';
+import { containerName, detectCheckout } from './sandbox/worktree.js';
 import { runInSandbox, shouldSandbox } from './sandbox/run.js';
 import {
   listSandboxes,
@@ -119,8 +119,8 @@ program
     'abort the boot when a required port is already in use (never prompt, never kill)',
     false,
   )
-  .option('--sandbox', "run in this worktree's sandbox even without an enabled `sandbox:` block")
-  .option('--no-sandbox', 'run natively even in a worktree with `sandbox:` configured')
+  .option('--sandbox', "run in this checkout's sandbox even if the config wouldn't")
+  .option('--no-sandbox', 'run natively even where the `sandbox:` config would sandbox')
   .option('--refresh-home', 'copy `sandbox.copy_home` into the sandbox again', false)
   .action(
     async (
@@ -156,26 +156,26 @@ program
             ? 'ask'
             : 'fail';
 
-      // Worktree sandbox: hand the whole run to an `orc start` inside this
-      // worktree's container and just wait for it. Nothing below runs here.
+      // Sandbox: hand the whole run to an `orc start` inside this checkout's
+      // container and just wait for it. Nothing below runs here.
       const sandboxName = process.env.ORCKIT_SANDBOX;
-      const worktree = sandboxName ? null : detectWorktree(dirname(configPath));
+      const checkout = sandboxName ? null : detectCheckout(dirname(configPath));
       let sandboxed = false;
       try {
         sandboxed = shouldSandbox({
           flag: opts.sandbox,
           config,
-          worktree,
+          checkout,
           insideSandbox: Boolean(sandboxName),
         });
       } catch (err) {
         fail(err);
       }
-      if (sandboxed && worktree) {
+      if (sandboxed && checkout) {
         const code = await runInSandbox({
           config,
           configPath,
-          worktree,
+          checkout,
           argsAfterStart: argsAfterCommand('start'),
           refreshHome: opts.refreshHome,
           leftoverMode: blockedPortMode,
@@ -312,7 +312,7 @@ program
         // Detect a JetBrains project so the dashboard can deep-link file
         // references in logs/errors. Search from the config file's directory.
         // In a sandbox the Mac-side `orc start` detected the IDE (the `.idea`
-        // dir may sit outside the mounted worktree) and relays opens to it.
+        // dir may sit outside the mounted checkout) and relays opens to it.
         const ide: IdeLink | null = process.env.ORCKIT_SANDBOX_IDE
           ? (JSON.parse(process.env.ORCKIT_SANDBOX_IDE) as IdeLink)
           : config.ide.enabled
@@ -718,7 +718,7 @@ async function reapPreviousSession(stateDir: string, mode: 'ask' | 'kill' | 'fai
 
 const sandboxCmd = program
   .command('sandbox')
-  .description('Manage worktree sandboxes (see `sandbox:` in the config)');
+  .description('Manage sandboxes (see `sandbox:` in the config)');
 
 sandboxCmd
   .command('list')
@@ -742,7 +742,7 @@ sandboxCmd
 
 sandboxCmd
   .command('stop [name]')
-  .description("Gracefully stop a sandbox (default: this worktree's)")
+  .description("Gracefully stop a sandbox (default: this checkout's)")
   .option('-c, --config <path>', 'config file path', './orckit.yaml')
   .action(async (name: string | undefined, opts: { config: string }) => {
     try {
@@ -757,7 +757,7 @@ sandboxCmd
 
 sandboxCmd
   .command('rm [name]')
-  .description("Force-remove a sandbox (default: this worktree's)")
+  .description("Force-remove a sandbox (default: this checkout's)")
   .option('-c, --config <path>', 'config file path', './orckit.yaml')
   .option('--volumes', 'also delete its image cache and home (logins)', false)
   .action(async (name: string | undefined, opts: { config: string; volumes: boolean }) => {
@@ -816,12 +816,12 @@ async function sandboxRows(): Promise<
   return rows;
 }
 
-/** The sandbox container name for the worktree containing `configFile`. */
+/** The sandbox container name for the git checkout containing `configFile`. */
 async function currentSandboxName(configFile: string): Promise<string> {
   const config = loadConfig(configFile);
-  const worktree = detectWorktree(dirname(resolve(configFile)));
-  if (!worktree) throw new Error('not in a linked git worktree — pass the sandbox name');
-  return containerName(config.project, worktree.id);
+  const checkout = detectCheckout(dirname(resolve(configFile)));
+  if (!checkout) throw new Error('not in a git checkout — pass the sandbox name');
+  return containerName(config.project, checkout.id);
 }
 
 /** The raw argv after the given subcommand (passed through to a sandbox). */

@@ -75,7 +75,8 @@ src/
                       # until the build settles (quiet-period debounce).
 
   sandbox/            # worktree sandboxes — CLI-only, the orchestrator never sees them
-    worktree.ts       # detectWorktree (git rev-parse) + container/domain naming
+    worktree.ts       # detectCheckout (git rev-parse: linked worktree or main
+                      # checkout `main`) + container/domain naming
     docker-args.ts    # pure buildRunArgs / innerStartArgs (the `docker run` argv)
     engine.ts         # docker calls: OrbStack check, image build (content-hashed
                       # tags), labelled volumes, list/stop/rm sandboxes
@@ -257,7 +258,8 @@ The `/sink` route is the design system kitchen sink — every component in every
 
 ## Worktree sandboxes: one `orc start`, two processes
 
-`orc start` in a linked git worktree with a `sandbox:` block never builds an
+`orc start` in a linked git worktree with a `sandbox:` block (or in the main
+checkout with `sandbox.main_checkout: true`) never builds an
 `Orckit` on the Mac: `cli.ts` hands off to `sandbox/run.ts`, which `docker run`s
 the **same orckit package** (bind-mounted read-only) as the container's main
 process and waits. The inner `orc start` is the unchanged native code path —

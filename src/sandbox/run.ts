@@ -17,7 +17,7 @@ import {
   type SandboxInfo,
 } from './engine.js';
 import { startOpenRelay } from './relay.js';
-import { containerName, sandboxDomain, type Worktree } from './worktree.js';
+import { containerName, sandboxDomain, type Checkout } from './worktree.js';
 
 /** Sandbox defaults for a `--sandbox` run without a `sandbox:` block. */
 const DEFAULT_SANDBOX: SandboxConfig = sandboxConfigSchema.parse({});
@@ -25,34 +25,36 @@ const DEFAULT_SANDBOX: SandboxConfig = sandboxConfigSchema.parse({});
 /**
  * Whether this `orc start` should hand off to a sandbox. Never from inside a
  * sandbox (no recursion); `--no-sandbox` always wins; `--sandbox` forces it
- * (but sandboxes are per-worktree, so it needs one); otherwise it's on when
- * the config has an enabled `sandbox:` block and we're in a linked worktree.
- * The main checkout therefore always runs natively.
+ * (sandboxes are named after the git checkout, so it needs one). Otherwise an
+ * enabled `sandbox:` block turns it on for linked worktrees, and for the main
+ * checkout only with `main_checkout: true`.
  */
 export function shouldSandbox(opts: {
   flag: boolean | undefined;
   config: OrckitConfig;
-  worktree: Worktree | null;
+  checkout: Checkout | null;
   insideSandbox: boolean;
 }): boolean {
   if (opts.insideSandbox || opts.flag === false) return false;
   if (opts.flag === true) {
-    if (!opts.worktree) {
+    if (!opts.checkout) {
       throw new Error(
-        '--sandbox needs a linked git worktree (sandboxes are named after it) — ' +
-          'create one with `git worktree add`, or drop --sandbox to run natively',
+        '--sandbox needs a git checkout (sandboxes are named after it) — ' +
+          'run it inside a git repository, or drop --sandbox to run natively',
       );
     }
     return true;
   }
-  return Boolean(opts.config.sandbox?.enabled && opts.worktree);
+  const sandbox = opts.config.sandbox;
+  if (!sandbox?.enabled || !opts.checkout) return false;
+  return opts.checkout.linked || sandbox.main_checkout;
 }
 
 export interface SandboxRunRequest {
   config: OrckitConfig;
   /** Absolute config path. */
   configPath: string;
-  worktree: Worktree;
+  checkout: Checkout;
   /** The user's `orc start` arguments (everything after `start`). */
   argsAfterStart: string[];
   refreshHome: boolean;
@@ -72,14 +74,14 @@ export function expandPath(path: string, base: string, home = homedir()): string
 }
 
 /**
- * Run `orc start` for this worktree inside its sandbox and resolve with the
+ * Run `orc start` for this checkout inside its sandbox and resolve with the
  * exit code to exit with. The inner orc owns the whole environment; this side
  * only prepares the container, relays IDE opens, forwards signals and waits.
  */
 export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
   const sandbox = req.config.sandbox ?? DEFAULT_SANDBOX;
   const configDir = dirname(req.configPath);
-  const { worktree } = req;
+  const { checkout } = req;
 
   if (!(await isOrbStack())) {
     throw new Error(
@@ -88,12 +90,12 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
     );
   }
 
-  const name = containerName(req.config.project, worktree.id);
-  const domain = sandboxDomain(sandbox.domain, req.config.project, worktree.id);
+  const name = containerName(req.config.project, checkout.id);
+  const domain = sandboxDomain(sandbox.domain, req.config.project, checkout.id);
 
   await clearLeftover(name, req);
-  await ensureSandboxVolumes(name, worktree.root);
-  copyMissingFiles(sandbox.copy_files, worktree, req);
+  await ensureSandboxVolumes(name, checkout.root);
+  copyMissingFiles(sandbox.copy_files, checkout, req);
 
   const image = await ensureImage({
     project: req.config.project,
@@ -121,11 +123,11 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
   }
 
   // Relative `cwd`s and log dirs resolve against the working directory, so the
-  // inner orc must start where this one did. Only the worktree is mounted.
-  const cwd = isUnderRoot(process.cwd(), worktree.root) ? process.cwd() : configDir;
+  // inner orc must start where this one did. Only the checkout is mounted.
+  const cwd = isUnderRoot(process.cwd(), checkout.root) ? process.cwd() : configDir;
   if (cwd !== process.cwd()) {
     req.warn(
-      `running from outside the worktree — relative paths in the config resolve against ${cwd} inside the sandbox`,
+      `running from outside the checkout — relative paths in the config resolve against ${cwd} inside the sandbox`,
     );
   }
 
@@ -140,7 +142,7 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
     domain,
     image,
     project: req.config.project,
-    worktree,
+    checkout,
     packageRoot: packageRoot(),
     configPath: req.configPath,
     cwd,
@@ -192,11 +194,12 @@ async function clearLeftover(name: string, req: SandboxRunRequest): Promise<void
 }
 
 /** sandbox.copy_files: bring git-ignored files from the main checkout into a fresh worktree. */
-function copyMissingFiles(files: string[], worktree: Worktree, req: SandboxRunRequest): void {
+function copyMissingFiles(files: string[], checkout: Checkout, req: SandboxRunRequest): void {
+  if (!checkout.linked) return; // the main checkout is where they come from
   for (const rel of files) {
-    const dest = join(worktree.root, rel);
+    const dest = join(checkout.root, rel);
     if (existsSync(dest)) continue;
-    const source = join(worktree.mainRoot, rel);
+    const source = join(checkout.mainRoot, rel);
     if (!existsSync(source)) {
       req.warn(`copy_files: ${rel} is missing in the main checkout too — skipped`);
       continue;

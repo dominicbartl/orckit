@@ -5,6 +5,8 @@ project: sandbox-demo
 # http://<worktree>.sandbox-demo.local — so several worktrees can each serve
 # :3000 and :6379 at the same time. From the main checkout it runs natively.
 sandbox:
+  # true → the main checkout's `orc start` runs in a sandbox too (as `main`).
+  # main_checkout: true
   # Git-ignored files a fresh worktree lacks, copied from the main checkout.
   copy_files:
     - examples/13-sandbox/.env.local

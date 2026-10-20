@@ -218,7 +218,7 @@ Set `command` to match the user's IDE if it isn't WebStorm. If a user says click
 
 ## `sandbox` (top-level, optional)
 
-Add it when the user wants to run the same environment once per git worktree (parallel feature branches, agents working side by side). With the block present, `orc start` in a linked worktree runs the stack in an isolated OrbStack container reachable at `<worktree>.<project>.local`, on the same ports; the main checkout stays native. macOS + OrbStack only. Details and every field: [README.md → Worktree sandboxes](README.md#worktree-sandboxes).
+Add it when the user wants to run the same environment once per git worktree (parallel feature branches, agents working side by side). With the block present, `orc start` in a linked worktree runs the stack in an isolated OrbStack container reachable at `<worktree>.<project>.local`, on the same ports; the main checkout stays native unless `main_checkout: true` (then it runs as `main.<project>.local`). macOS + OrbStack only. Details and every field: [README.md → Worktree sandboxes](README.md#worktree-sandboxes).
 
 Shape the config for it:
 
@@ -229,7 +229,7 @@ Shape the config for it:
 
 The app usually needs two changes too, which you should make or point out: dev servers with a Host-header check allow the sandbox hostname (`allowedHosts: [".local"]`), and browser-side URLs to local services derive from `location.hostname` rather than `localhost`. Memory is shared across all sandboxes (OrbStack's VM); a stack with several Angular/webpack dev servers needs ~10 GB.
 
-When you run `orc start` yourself in a worktree that has `sandbox:`, it runs sandboxed; `--no-sandbox` runs natively. Manage leftovers with `orc sandbox list | stop | rm | prune`.
+When you run `orc start` yourself in a worktree that has `sandbox:` (or in the main checkout with `main_checkout: true`), it runs sandboxed; `--no-sandbox` runs natively. Manage leftovers with `orc sandbox list | stop | rm | prune`.
 
 ## Environment and secrets
 

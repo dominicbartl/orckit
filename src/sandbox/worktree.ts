@@ -2,36 +2,44 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 
-/** A linked git worktree (never the main checkout). */
-export interface Worktree {
+/** Sandbox id of a repository's main checkout. */
+export const MAIN_CHECKOUT_ID = 'main';
+
+/** A git checkout a sandbox can run: the main checkout or a linked worktree. */
+export interface Checkout {
   /**
-   * The worktree's id — the name of its admin dir under `.git/worktrees/`.
-   * Git keeps it unique per repository and it survives branch switches and
-   * detached HEADs, which is why it names the sandbox instead of the branch.
+   * Names the sandbox. For a linked worktree its id — the name of its admin
+   * dir under `.git/worktrees/`, which git keeps unique per repository and
+   * which survives branch switches and detached HEADs. For the main checkout
+   * {@link MAIN_CHECKOUT_ID}.
    */
   id: string;
-  /** Absolute top-level directory of the worktree. */
+  /** Absolute top-level directory of this checkout. */
   root: string;
   /** Absolute shared `.git` directory of the repository. */
   commonDir: string;
   /** Absolute top-level directory of the main checkout. */
   mainRoot: string;
+  /** True for a linked worktree, false for the main checkout. */
+  linked: boolean;
 }
 
 /**
- * Pure part of worktree detection: `git rev-parse --path-format=absolute
- * --git-dir --git-common-dir --show-toplevel` output → Worktree, or null for a
- * main checkout (its git dir IS the common dir).
+ * Pure part of checkout detection: `git rev-parse --path-format=absolute
+ * --git-dir --git-common-dir --show-toplevel` output → Checkout. A main
+ * checkout's git dir IS the common dir; a linked worktree's lives under it.
  */
-export function parseWorktree(gitDir: string, commonDir: string, root: string): Worktree | null {
-  if (resolve(gitDir) === resolve(commonDir)) return null;
+export function parseCheckout(gitDir: string, commonDir: string, root: string): Checkout {
+  if (resolve(gitDir) === resolve(commonDir)) {
+    return { id: MAIN_CHECKOUT_ID, root, commonDir, mainRoot: root, linked: false };
+  }
   // A main checkout's common dir is `<mainRoot>/.git`; a bare repo has no
   // main checkout, so fall back to the common dir's parent anyway.
-  return { id: basename(gitDir), root, commonDir, mainRoot: dirname(commonDir) };
+  return { id: basename(gitDir), root, commonDir, mainRoot: dirname(commonDir), linked: true };
 }
 
-/** Detect whether `dir` is inside a linked worktree. Null outside git, too. */
-export function detectWorktree(dir: string): Worktree | null {
+/** The git checkout `dir` is in, or null outside git. */
+export function detectCheckout(dir: string): Checkout | null {
   let out: string;
   try {
     out = execFileSync(
@@ -44,7 +52,7 @@ export function detectWorktree(dir: string): Worktree | null {
   }
   const [gitDir, commonDir, root] = out.trim().split('\n');
   if (!gitDir || !commonDir || !root || !isAbsolute(gitDir)) return null;
-  return parseWorktree(gitDir, commonDir, root);
+  return parseCheckout(gitDir, commonDir, root);
 }
 
 /** Lowercase DNS label: `[a-z0-9-]`, no leading/trailing dash, ≤ `max` chars. */
@@ -71,7 +79,7 @@ export function containerName(project: string, worktreeId: string): string {
   return `${name.slice(0, 63 - hash.length - 1).replace(/-+$/, '')}-${hash}`;
 }
 
-/** Expand a `sandbox.domain` template: `{name}` → worktree id, `{project}`. */
+/** Expand a `sandbox.domain` template: `{name}` → checkout id, `{project}`. */
 export function sandboxDomain(template: string, project: string, worktreeId: string): string {
   return template
     .replaceAll('{name}', dnsLabel(worktreeId))

@@ -295,10 +295,16 @@ export const sandboxConfigSchema = z.object({
    * When true (the default once a `sandbox:` block exists), `orc start` from a
    * linked git worktree runs the whole environment inside an isolated OrbStack
    * container with its own hostname, so every worktree can use the same ports.
-   * The main checkout always runs natively. `--sandbox` / `--no-sandbox`
-   * override this per run.
+   * The main checkout runs natively unless `main_checkout` is set.
+   * `--sandbox` / `--no-sandbox` override this per run.
    */
   enabled: z.boolean().default(true),
+  /**
+   * Also sandbox the main checkout's plain `orc start` (as `main`, e.g.
+   * `main.<project>.local`). Off by default: the main checkout runs natively
+   * next to the worktree sandboxes. `--no-sandbox` still runs it natively.
+   */
+  main_checkout: z.boolean().default(false),
   /**
    * Project Dockerfile layered on orckit's base image (node 22, docker,
    * iptables). It must start with `ARG ORCKIT_BASE` + `FROM ${ORCKIT_BASE}`.

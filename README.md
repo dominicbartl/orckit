@@ -90,8 +90,8 @@ npx orc start --mcp-port 7700   # override the YAML mcp.port
 npx orc start --no-mcp          # force-disable the built-in MCP server
 npx orc start --kill-blocked-ports    # free required ports without asking
 npx orc start --fail-on-blocked-ports # abort if a required port is taken
-npx orc start --no-sandbox      # in a git worktree with `sandbox:` configured: run natively
-npx orc sandbox list            # worktree sandboxes (see "Worktree sandboxes")
+npx orc start --no-sandbox      # where `sandbox:` would sandbox this run: run natively
+npx orc sandbox list            # sandboxes (see "Worktree sandboxes")
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → per-process `stop_grace_ms`, default 10s → SIGKILL).
@@ -226,15 +226,20 @@ ide:                         # optional; on by default. Deep-links file refs in
 sandbox:                     # optional; see "Worktree sandboxes". Present →
                              # `orc start` in a linked git worktree runs inside
                              # an isolated OrbStack container (own hostname,
-                             # same ports). The main checkout stays native.
+                             # same ports). The main checkout stays native
+                             # unless main_checkout is set.
   enabled: true              # default: true (once the block exists)
+  main_checkout: false       # default: false. true → the main checkout's
+                             #   plain `orc start` is sandboxed too, as `main`
+                             #   (main.<project>.local)
   dockerfile: ./orckit.sandbox.Dockerfile  # optional project tooling on top of
                              #   orckit's base image; must start with
                              #   `ARG ORCKIT_BASE` + `FROM ${ORCKIT_BASE}`.
                              #   Built without a context (no COPY); rebuilt
                              #   when its content changes.
   domain: '{name}.{project}.local'  # default. Hostname the Mac reaches the
-                             #   sandbox at; {name} = worktree, {project} = project.
+                             #   sandbox at; {name} = worktree id (or `main`),
+                             #   {project} = project.
   copy_files: [backend/.env.local]  # git-ignored files copied from the main
                              #   checkout into the worktree when missing there
   copy_home: [.config/stripe]       # Mac-home paths (CLI logins) copied into the
@@ -460,8 +465,9 @@ container and the stack is reachable at its own hostname:
 ```
 
 so `http://feature-x.my-app.local:3000` and `http://bugfix-y.my-app.local:3000`
-are two different stacks. The main checkout always runs natively, so it keeps
-working alongside them.
+are two different stacks. The main checkout runs natively by default, so it
+keeps working alongside them; set `main_checkout: true` to sandbox it as well
+(as `main`, at `main.my-app.local`) — every `orc start` then uses a sandbox.
 
 ```yaml
 sandbox:
@@ -476,7 +482,7 @@ into containers, so watch-mode dev servers rebuild on edits). orckit checks
 and refuses otherwise; pass `--no-sandbox` to run natively.
 
 **How it works.** The worktree's name (its id under `.git/worktrees/`, stable
-across branch switches) names the sandbox. orckit builds an image (its base:
+across branch switches) names the sandbox; the main checkout's sandbox is `main`. orckit builds an image (its base:
 Node 22 + a private Docker daemon; your `sandbox.dockerfile` on top, rebuilt
 when it changes), mounts the worktree, the repository's `.git` and orckit
 itself at the **same paths**, and runs the same `orc start` inside as the
@@ -513,15 +519,15 @@ teardown inside. Nothing is published on the Mac's localhost.
 
 | Command | Does |
 |---|---|
-| `orc start` (in a worktree) | Starts this worktree's sandbox. `--no-sandbox` runs natively; `--sandbox` forces it without a `sandbox:` block; `--refresh-home` re-copies `copy_home`. |
+| `orc start` | In a worktree (or the main checkout with `main_checkout: true`): starts its sandbox. `--no-sandbox` runs natively; `--sandbox` forces a sandbox in any git checkout, even without a `sandbox:` block; `--refresh-home` re-copies `copy_home`. |
 | `orc sandbox list` | All sandboxes — running, or stopped with their volumes (image cache, home) kept — and their worktree (flags deleted ones) |
-| `orc sandbox stop [name]` | Graceful stop (full teardown inside); default: this worktree's |
-| `orc sandbox rm [name] [--volumes]` | Force-remove; `--volumes` also drops its Docker image cache and home (logins) |
+| `orc sandbox stop [name]` | Graceful stop (full teardown inside); default: this checkout's |
+| `orc sandbox rm [name] [--volumes]` | Force-remove (default: this checkout's); `--volumes` also drops its Docker image cache and home (logins) |
 | `orc sandbox prune` | Remove sandboxes and volumes whose worktree no longer exists |
 
 If the `orc start` attached to a sandbox is killed outright, the sandbox keeps
 running headless (nothing is orphaned — it all lives in the container). The
-next `orc start` in that worktree offers to replace it (`--kill-blocked-ports`
+next `orc start` in that checkout offers to replace it (`--kill-blocked-ports`
 does so unattended).
 
 ## Programmatic API

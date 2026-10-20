@@ -10,11 +10,12 @@ const spec = (over: Partial<SandboxRunSpec> = {}): SandboxRunSpec => ({
   domain: 'wt1.app.local',
   image: 'orckit-sandbox-app:abc',
   project: 'app',
-  worktree: {
+  checkout: {
     id: 'wt1',
     root: '/repo/.claude/worktrees/wt1',
     commonDir: '/repo/.git',
     mainRoot: '/repo',
+    linked: true,
   },
   packageRoot: '/opt/orckit',
   configPath: '/repo/.claude/worktrees/wt1/orckit.yaml',
@@ -82,6 +83,18 @@ describe('buildRunArgs', () => {
       'orckit-app-wt1-home:/root',
       '/Users/me/.config/stripe:/orckit-seed/.config/stripe:ro',
     ]);
+  });
+
+  it('mounts a main checkout once (its .git sits inside it)', () => {
+    const main = {
+      id: 'main',
+      root: '/repo',
+      commonDir: '/repo/.git',
+      mainRoot: '/repo',
+      linked: false,
+    };
+    const v = values(buildRunArgs(spec({ checkout: main, name: 'orckit-app-main' })), '-v');
+    expect(v.slice(0, 2)).toEqual(['/repo:/repo', '/opt/orckit:/opt/orckit:ro']);
   });
 
   it('skips mounts already covered by a parent mount', () => {

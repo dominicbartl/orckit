@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { isUnderRoot } from '../web/open.js';
-import type { Worktree } from './worktree.js';
+import type { Checkout } from './worktree.js';
 
-/** Everything `docker run` needs to start one worktree sandbox. Pure data. */
+/** Everything `docker run` needs to start one checkout's sandbox. Pure data. */
 export interface SandboxRunSpec {
   /** Container name (also the volume prefix). */
   name: string;
@@ -10,7 +10,7 @@ export interface SandboxRunSpec {
   domain: string;
   image: string;
   project: string;
-  worktree: Worktree;
+  checkout: Checkout;
   /** Root of the orckit package to run inside — mounted read-only at the same path. */
   packageRoot: string;
   /** Absolute path of the config file (same path inside the sandbox). */
@@ -61,7 +61,7 @@ export const SEED_DIR = '/orckit-seed';
  * containers included — lives inside it.
  */
 export function buildRunArgs(spec: SandboxRunSpec): string[] {
-  const { worktree } = spec;
+  const { checkout } = spec;
   const args = ['run', '--rm', '-i'];
   if (spec.tty) args.push('-t');
   args.push(
@@ -80,7 +80,7 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
     '--label',
     `${PROJECT_LABEL}=${spec.project}`,
     '--label',
-    `${WORKTREE_LABEL}=${worktree.root}`,
+    `${WORKTREE_LABEL}=${checkout.root}`,
     '--label',
     `${CLIENT_PID_LABEL}=${spec.clientPid}`,
     '--label',
@@ -98,8 +98,8 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
     mounted.push(target);
     args.push('-v', `${source}:${target}${readonly ? ':ro' : ''}`);
   };
-  bind(worktree.root, worktree.root, false);
-  bind(worktree.commonDir, worktree.commonDir, false);
+  bind(checkout.root, checkout.root, false);
+  bind(checkout.commonDir, checkout.commonDir, false);
   bind(spec.packageRoot, spec.packageRoot, true);
 
   // Per-sandbox state that must survive restarts: the inner Docker image cache
