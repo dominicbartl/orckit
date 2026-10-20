@@ -600,6 +600,18 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       // illegal stopping → ready transition and leave the child untracked).
       if (cancelled()) throw new StartupAbortedError(name);
     } catch (err) {
+      // The probe gave up (timeout, probe error) while the process is still
+      // alive: record THAT as the failure before stopping it. Otherwise the
+      // exit caused by our own stop lands first and is reported as the cause
+      // ("exited (code ?)"), hiding the real reason.
+      const failure =
+        err instanceof HealthTimeoutError
+          ? new Error(`"${name}" did not become ready: ${err.message}`)
+          : (err as Error);
+      if (runner.running && !cancelled() && handle.state !== 'failed') {
+        this.applyEvent(name, { kind: 'fail' });
+        this.emit('process:failed', name, failure);
+      }
       if (runner.running) await runner.stop();
       if (cancelled()) {
         // Cancelled by shutdown/restart — not a failure. stopOne() owns the
@@ -609,11 +621,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       // handleExit (if it fired) will already have transitioned to failed; otherwise do it here.
       if (handle.state !== 'failed') {
         this.applyEvent(name, { kind: 'fail' });
-        this.emit('process:failed', name, err as Error);
+        this.emit('process:failed', name, failure);
       }
-      throw err instanceof HealthTimeoutError
-        ? new Error(`"${name}" did not become ready: ${err.message}`)
-        : (err as Error);
+      throw failure;
     }
 
     this.markReadyAndRunning(name);
@@ -734,6 +744,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     const handle = this.handles.get(name);
     if (!handle) return;
     const expected = handle.state === 'stopping' || this.stopping || this.disposed;
+    // Already failed (a health check gave up and we stopped it): the failure
+    // was reported with its real reason; this exit is just our own stop.
+    const alreadyFailed = handle.state === 'failed';
     handle.runner = null;
     handle.probe = null;
     this.applyEvent(name, { kind: 'exited', expected, code });
@@ -745,7 +758,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       if (!expected) void this.maybeRestart(name);
       return;
     }
-    this.emit('process:failed', name, new Error(`exited (code ${code ?? '?'})`));
+    if (!alreadyFailed)
+      this.emit('process:failed', name, new Error(`exited (code ${code ?? '?'})`));
     void this.maybeRestart(name);
   }
 

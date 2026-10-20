@@ -217,6 +217,26 @@ describe('Orckit end-to-end', () => {
     expect(orckit.state('flaky')).toBe('failed');
   });
 
+  it('reports a ready timeout as the failure, not the exit caused by stopping the process', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        slow: {
+          command: 'sleep 30',
+          ready: { type: 'log-pattern', pattern: 'never printed', timeout_ms: 200 },
+          manual_retry: true,
+        },
+      }),
+    );
+    const failures: string[] = [];
+    orckit.on('process:failed', (_name, err) => failures.push(err?.message ?? ''));
+    await orckit.start();
+    // Let the stop's exit event land too.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(orckit.state('slow')).toBe('failed');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/"slow" did not become ready/);
+  });
+
   it('with manual_retry: true, the same failure does not throw', async () => {
     orckit = new Orckit(
       makeConfig({
