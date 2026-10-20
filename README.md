@@ -90,6 +90,8 @@ npx orc start --mcp-port 7700   # override the YAML mcp.port
 npx orc start --no-mcp          # force-disable the built-in MCP server
 npx orc start --kill-blocked-ports    # free required ports without asking
 npx orc start --fail-on-blocked-ports # abort if a required port is taken
+npx orc start --no-sandbox      # in a git worktree with `sandbox:` configured: run natively
+npx orc sandbox list            # worktree sandboxes (see "Worktree sandboxes")
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → per-process `stop_grace_ms`, default 10s → SIGKILL).
@@ -220,6 +222,32 @@ ide:                         # optional; on by default. Deep-links file refs in
                              #   (`idea`, `pycharm`, `phpstorm`, `goland`, …).
                              #   Create it via the IDE's Tools → "Create
                              #   Command-Line Launcher", or set the full path.
+
+sandbox:                     # optional; see "Worktree sandboxes". Present →
+                             # `orc start` in a linked git worktree runs inside
+                             # an isolated OrbStack container (own hostname,
+                             # same ports). The main checkout stays native.
+  enabled: true              # default: true (once the block exists)
+  dockerfile: ./orckit.sandbox.Dockerfile  # optional project tooling on top of
+                             #   orckit's base image; must start with
+                             #   `ARG ORCKIT_BASE` + `FROM ${ORCKIT_BASE}`.
+                             #   Built without a context (no COPY); rebuilt
+                             #   when its content changes.
+  domain: '{name}.{project}.local'  # default. Hostname the Mac reaches the
+                             #   sandbox at; {name} = worktree, {project} = project.
+  copy_files: [backend/.env.local]  # git-ignored files copied from the main
+                             #   checkout into the worktree when missing there
+  copy_home: [.config/stripe]       # Mac-home paths (CLI logins) copied into the
+                             #   sandbox's own home: once, again when this list
+                             #   changes, or with --refresh-home. Never shared back.
+  mounts:                    # extra bind mounts (same path inside by default)
+    - source: ~/Library/pnpm/store
+      target: ~/Library/pnpm/store   # optional
+      readonly: false                # default: false
+  env:                       # extra environment; a leading ~ expands
+    npm_config_store_dir: ~/Library/pnpm/store
+  memory: 8g                 # optional memory cap (Docker notation)
+  cpus: 4                    # optional CPU cap
 
 preflight:                   # optional pre-startup checks (run in parallel)
   - name: docker-up
@@ -418,6 +446,83 @@ Configure via the `mcp:` block in `orckit.yaml`, or override on the command line
 - `--no-mcp` — force-disable, overriding YAML.
 
 The server binds to `127.0.0.1` by default. Change `mcp.host` only if you understand the access-control implications — the MCP tools are read-only, but they expose process output that may contain secrets.
+
+## Worktree sandboxes
+
+Run the same environment several times on one Mac — one per git worktree —
+with **the same ports** in each. With a `sandbox:` block in the config,
+`orc start` from a linked git worktree hands the whole run to an isolated
+container and the stack is reachable at its own hostname:
+
+```
+  sandbox orckit-my-app-feature-x → feature-x.my-app.local (also orckit-my-app-feature-x.orb.local)
+  web:  http://feature-x.my-app.local:7677
+```
+
+so `http://feature-x.my-app.local:3000` and `http://bugfix-y.my-app.local:3000`
+are two different stacks. The main checkout always runs natively, so it keeps
+working alongside them.
+
+```yaml
+sandbox:
+  dockerfile: ./orckit.sandbox.Dockerfile   # optional: Java, CLIs, … for your stack
+  copy_files: [backend/.env.local]          # fresh worktrees lack git-ignored files
+  copy_home: [.config/stripe]               # CLI logins, copied once
+```
+
+**Requirements:** macOS with [OrbStack](https://orbstack.dev) as the Docker
+engine (it routes container hostnames to the Mac and forwards Mac file events
+into containers, so watch-mode dev servers rebuild on edits). orckit checks
+and refuses otherwise; pass `--no-sandbox` to run natively.
+
+**How it works.** The worktree's name (its id under `.git/worktrees/`, stable
+across branch switches) names the sandbox. orckit builds an image (its base:
+Node 22 + a private Docker daemon; your `sandbox.dockerfile` on top, rebuilt
+when it changes), mounts the worktree, the repository's `.git` and orckit
+itself at the **same paths**, and runs the same `orc start` inside as the
+container's main process. Inside, everything works as natively: `type: docker`
+processes start their containers in the sandbox's own Docker daemon, on the
+sandbox's network. On the Mac side, `orc start` just forwards your terminal and
+signals — Ctrl-C, SIGTERM and closing the terminal all run the normal graceful
+teardown inside. Nothing is published on the Mac's localhost.
+
+- **Servers bound to localhost are reachable.** The sandbox routes traffic
+  arriving for its hostname to `127.0.0.1`, and resolves `localhost` to IPv4
+  first, so dev servers need no `--host 0.0.0.0`. A server bound to `::1` only
+  stays unreachable.
+- **Host-header checks.** Dev servers that validate the `Host` header
+  (webpack-dev-server / `ng serve`, Vite) must allow the sandbox hostname,
+  e.g. Angular `"allowedHosts": [".local"]`.
+- **Browser-side URLs.** A frontend that hardcodes `http://localhost:<port>`
+  for its API makes the browser call the *Mac's* localhost — another stack.
+  Derive such URLs from `location.hostname` instead.
+- **`node_modules` is shared with the Mac.** Install inside the sandbox with
+  pnpm `supportedArchitectures` covering both platforms (`os: [current, linux]`)
+  and mount the Mac's pnpm store at the same path, so Mac tooling keeps working
+  in that worktree. Native addons that download their binary in an install
+  script (e.g. `re2`) still end up built for whichever platform installed last.
+- **Memory.** All sandboxes share OrbStack's VM memory (OrbStack Settings →
+  System → Memory). When it runs out, the kernel kills the largest processes,
+  in *any* sandbox. Size the VM for the stacks you run at once, start subsets
+  (`orc start api web`), and set `sandbox.memory` so a spike only hits the
+  sandbox that caused it.
+- **IDE links** in the web dashboard still open files in your Mac's IDE (relayed
+  by the Mac-side `orc start`; only files inside the IDE project).
+- **Not a security boundary.** The container is `--privileged` (its Docker
+  daemon needs it) inside OrbStack's VM.
+
+| Command | Does |
+|---|---|
+| `orc start` (in a worktree) | Starts this worktree's sandbox. `--no-sandbox` runs natively; `--sandbox` forces it without a `sandbox:` block; `--refresh-home` re-copies `copy_home`. |
+| `orc sandbox list` | All sandboxes — running, or stopped with their volumes (image cache, home) kept — and their worktree (flags deleted ones) |
+| `orc sandbox stop [name]` | Graceful stop (full teardown inside); default: this worktree's |
+| `orc sandbox rm [name] [--volumes]` | Force-remove; `--volumes` also drops its Docker image cache and home (logins) |
+| `orc sandbox prune` | Remove sandboxes and volumes whose worktree no longer exists |
+
+If the `orc start` attached to a sandbox is killed outright, the sandbox keeps
+running headless (nothing is orphaned — it all lives in the container). The
+next `orc start` in that worktree offers to replace it (`--kill-blocked-ports`
+does so unattended).
 
 ## Programmatic API
 

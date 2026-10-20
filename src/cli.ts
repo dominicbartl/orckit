@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Command } from 'commander';
@@ -33,6 +34,16 @@ import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
 import { attachDashboard, type DashboardHandle, type DashboardLink } from './reporter/dashboard.js';
 import { buildGraph, filterToTargets } from './graph/resolver.js';
+import { containerName, detectWorktree } from './sandbox/worktree.js';
+import { runInSandbox, shouldSandbox } from './sandbox/run.js';
+import {
+  listSandboxes,
+  listSandboxVolumes,
+  removeSandbox,
+  removeSandboxVolumes,
+  stopSandbox,
+} from './sandbox/engine.js';
+import type { IdeLink } from './web/ide.js';
 
 const program = new Command()
   .name('orc')
@@ -108,6 +119,9 @@ program
     'abort the boot when a required port is already in use (never prompt, never kill)',
     false,
   )
+  .option('--sandbox', "run in this worktree's sandbox even without an enabled `sandbox:` block")
+  .option('--no-sandbox', 'run natively even in a worktree with `sandbox:` configured')
+  .option('--refresh-home', 'copy `sandbox.copy_home` into the sandbox again', false)
   .action(
     async (
       processes: string[],
@@ -124,9 +138,64 @@ program
         webPort?: string;
         killBlockedPorts: boolean;
         failOnBlockedPorts: boolean;
+        sandbox?: boolean;
+        refreshHome: boolean;
       },
     ) => {
       const config = loadConfig(opts.config);
+      const configPath = resolve(opts.config);
+
+      if (opts.killBlockedPorts && opts.failOnBlockedPorts) {
+        fail(new Error('--kill-blocked-ports and --fail-on-blocked-ports are mutually exclusive'));
+      }
+      const blockedPortMode: 'ask' | 'kill' | 'fail' = opts.killBlockedPorts
+        ? 'kill'
+        : opts.failOnBlockedPorts
+          ? 'fail'
+          : process.stdin.isTTY
+            ? 'ask'
+            : 'fail';
+
+      // Worktree sandbox: hand the whole run to an `orc start` inside this
+      // worktree's container and just wait for it. Nothing below runs here.
+      const sandboxName = process.env.ORCKIT_SANDBOX;
+      const worktree = sandboxName ? null : detectWorktree(dirname(configPath));
+      let sandboxed = false;
+      try {
+        sandboxed = shouldSandbox({
+          flag: opts.sandbox,
+          config,
+          worktree,
+          insideSandbox: Boolean(sandboxName),
+        });
+      } catch (err) {
+        fail(err);
+      }
+      if (sandboxed && worktree) {
+        const code = await runInSandbox({
+          config,
+          configPath,
+          worktree,
+          argsAfterStart: argsAfterCommand('start'),
+          refreshHome: opts.refreshHome,
+          leftoverMode: blockedPortMode,
+          ide: config.ide.enabled
+            ? detectIde(dirname(configPath), { command: config.ide.command })
+            : null,
+          log: (msg) => console.log(chalk.dim(`  ${msg}`)),
+          warn: (msg) => console.log(chalk.yellow(`  ${msg}`)),
+          confirm,
+        }).catch(fail);
+        process.exit(code);
+      }
+
+      // Inside a sandbox the listeners bind container-local addresses; show
+      // the URLs the Mac actually reaches (the sandbox hostname).
+      const sandboxHost = process.env.ORCKIT_SANDBOX_HOST;
+      const publicUrl = (url: string) =>
+        sandboxHost ? url.replace(/^(\w+:\/\/)(\[[^\]]*\]|[^/:]+)/, `$1${sandboxHost}`) : url;
+      const mcpName = sandboxName ?? 'orckit';
+
       const orckit = new Orckit(config);
 
       // Capture each process's failure message so the boot-failure dump can
@@ -172,26 +241,16 @@ program
       // process (a previous unclean shutdown, a stale `orc start`)? Depending
       // on flags/TTY this kills the holder, asks, or aborts — all better than
       // the old behavior of failing halfway through the boot.
-      if (opts.killBlockedPorts && opts.failOnBlockedPorts) {
-        fail(new Error('--kill-blocked-ports and --fail-on-blocked-ports are mutually exclusive'));
-      }
       const requiredNames =
         targets && targets.length > 0
           ? [...filterToTargets(buildGraph(config), targets)]
           : Object.entries(config.processes)
               .filter(([, p]) => !p.optional)
               .map(([n]) => n);
-      const blockedPortMode: 'ask' | 'kill' | 'fail' = opts.killBlockedPorts
-        ? 'kill'
-        : opts.failOnBlockedPorts
-          ? 'fail'
-          : process.stdin.isTTY
-            ? 'ask'
-            : 'fail';
       // A previous `orc start` that was SIGKILLed (force quit, OOM) had no
       // chance to run any teardown — its detached process groups are still
       // out there. The session file it left behind is how we find them.
-      const stateDir = dirname(resolve(opts.config)) + '/.orckit';
+      const stateDir = dirname(configPath) + '/.orckit';
       await reapPreviousSession(stateDir, blockedPortMode);
       await resolveBlockedPorts(config, requiredNames, blockedPortMode);
 
@@ -226,7 +285,7 @@ program
             port: cliMcpPort ?? config.mcp.port,
             host: config.mcp.host,
           });
-          links.push({ label: 'mcp', value: mcpServer.url });
+          links.push({ label: 'mcp', value: publicUrl(mcpServer.url) });
         } catch (err) {
           console.error(chalk.yellow(`  mcp server failed to start: ${(err as Error).message}`));
           console.error(
@@ -252,17 +311,22 @@ program
       } else if (cliWebEnabled && config.web.enabled) {
         // Detect a JetBrains project so the dashboard can deep-link file
         // references in logs/errors. Search from the config file's directory.
-        const ide = config.ide.enabled
-          ? detectIde(dirname(resolve(opts.config)), { command: config.ide.command })
-          : null;
+        // In a sandbox the Mac-side `orc start` detected the IDE (the `.idea`
+        // dir may sit outside the mounted worktree) and relays opens to it.
+        const ide: IdeLink | null = process.env.ORCKIT_SANDBOX_IDE
+          ? (JSON.parse(process.env.ORCKIT_SANDBOX_IDE) as IdeLink)
+          : config.ide.enabled
+            ? detectIde(dirname(configPath), { command: config.ide.command })
+            : null;
         try {
           webServer = await attachWebUi(orckit, {
             port: cliWebPort ?? config.web.port,
             host: config.web.host,
             ide,
+            openRelay: process.env.ORCKIT_OPEN_RELAY,
           });
           // Web dashboard is the headline action surface — show it first.
-          links.unshift({ label: 'web', value: webServer.url });
+          links.unshift({ label: 'web', value: publicUrl(webServer.url) });
           if (ide) links.push({ label: 'ide', value: `file links open via \`${ide.command}\`` });
         } catch (err) {
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
@@ -303,10 +367,11 @@ program
         // the user still sees where the web dashboard / MCP / logs landed.
         if (logReporter) console.log(chalk.dim(`  writing logs to ${logReporter.dir}`));
         if (mcpServer) {
-          console.log(chalk.dim(`  mcp:  ${mcpServer.url}`));
-          console.log(chalk.dim(`        claude mcp add --transport http orckit ${mcpServer.url}`));
+          const url = publicUrl(mcpServer.url);
+          console.log(chalk.dim(`  mcp:  ${url}`));
+          console.log(chalk.dim(`        claude mcp add --transport http ${mcpName} ${url}`));
         }
-        if (webServer) console.log(chalk.dim(`  web:  ${webServer.url}`));
+        if (webServer) console.log(chalk.dim(`  web:  ${publicUrl(webServer.url)}`));
 
         detachReporter = attachCliReporter(orckit, {
           showOutput: opts.showOutput,
@@ -649,6 +714,121 @@ async function reapPreviousSession(stateDir: string, mode: 'ask' | 'kill' | 'fai
     fail(new Error(`could not stop leftover process(es): ${failed.join(', ')}`));
   }
   clearSession(stateDir);
+}
+
+const sandboxCmd = program
+  .command('sandbox')
+  .description('Manage worktree sandboxes (see `sandbox:` in the config)');
+
+sandboxCmd
+  .command('list')
+  .description('List sandbox containers')
+  .action(async () => {
+    try {
+      const rows = await sandboxRows();
+      if (rows.length === 0) {
+        console.log(chalk.dim('  no sandboxes'));
+        return;
+      }
+      for (const s of rows) {
+        const state = s.running ? chalk.green(s.status) : chalk.dim(s.status);
+        const gone = existsSync(s.worktree) ? '' : chalk.yellow('  (worktree deleted)');
+        console.log(`  ${chalk.cyan(s.name)}  ${state}  ${chalk.dim(s.worktree)}${gone}`);
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+sandboxCmd
+  .command('stop [name]')
+  .description("Gracefully stop a sandbox (default: this worktree's)")
+  .option('-c, --config <path>', 'config file path', './orckit.yaml')
+  .action(async (name: string | undefined, opts: { config: string }) => {
+    try {
+      const target = name ?? (await currentSandboxName(opts.config));
+      console.log(chalk.dim(`  stopping ${target} (graceful teardown inside)...`));
+      await stopSandbox(target);
+      console.log(chalk.green(`  ✓ ${target} stopped`));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+sandboxCmd
+  .command('rm [name]')
+  .description("Force-remove a sandbox (default: this worktree's)")
+  .option('-c, --config <path>', 'config file path', './orckit.yaml')
+  .option('--volumes', 'also delete its image cache and home (logins)', false)
+  .action(async (name: string | undefined, opts: { config: string; volumes: boolean }) => {
+    try {
+      const target = name ?? (await currentSandboxName(opts.config));
+      const row = (await sandboxRows()).find((s) => s.name === target);
+      if (!row) throw new Error(`no sandbox named ${target} (see \`orc sandbox list\`)`);
+      if (row.hasContainer) await removeSandbox(target);
+      if (opts.volumes) await removeSandboxVolumes(target);
+      console.log(chalk.green(`  ✓ ${target} removed${opts.volumes ? ' (with volumes)' : ''}`));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+sandboxCmd
+  .command('prune')
+  .description('Remove sandboxes (and their volumes) whose worktree no longer exists')
+  .action(async () => {
+    try {
+      const stale = (await sandboxRows()).filter((s) => !existsSync(s.worktree));
+      for (const s of stale) {
+        try {
+          if (s.hasContainer) await removeSandbox(s.name);
+          await removeSandboxVolumes(s.name);
+          console.log(chalk.green(`  ✓ removed ${s.name}`));
+        } catch (err) {
+          console.log(chalk.red(`  ✗ ${s.name}: ${(err as Error).message}`));
+        }
+      }
+      if (stale.length === 0) console.log(chalk.dim('  nothing to prune'));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+/**
+ * Every sandbox: running/exited containers, plus stopped ones that only have
+ * volumes left (`--rm` drops the container on every stop, not the volumes).
+ */
+async function sandboxRows(): Promise<
+  Array<{ name: string; worktree: string; status: string; running: boolean; hasContainer: boolean }>
+> {
+  const [containers, volumes] = await Promise.all([listSandboxes(), listSandboxVolumes()]);
+  const rows = containers.map(({ name, worktree, status, running }) => ({
+    name,
+    worktree,
+    status,
+    running,
+    hasContainer: true,
+  }));
+  for (const [name, worktree] of volumes) {
+    if (rows.some((r) => r.name === name)) continue;
+    rows.push({ name, worktree, status: 'stopped', running: false, hasContainer: false });
+  }
+  return rows;
+}
+
+/** The sandbox container name for the worktree containing `configFile`. */
+async function currentSandboxName(configFile: string): Promise<string> {
+  const config = loadConfig(configFile);
+  const worktree = detectWorktree(dirname(resolve(configFile)));
+  if (!worktree) throw new Error('not in a linked git worktree — pass the sandbox name');
+  return containerName(config.project, worktree.id);
+}
+
+/** The raw argv after the given subcommand (passed through to a sandbox). */
+function argsAfterCommand(command: string): string[] {
+  const args = process.argv.slice(2);
+  const index = args.indexOf(command);
+  return index === -1 ? [] : args.slice(index + 1);
 }
 
 /** One-line Y/n question on the terminal; empty answer counts as yes. */

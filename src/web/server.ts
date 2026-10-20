@@ -4,15 +4,15 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute } from 'node:path';
 import type { Orckit } from '../orchestrator/orchestrator.js';
 import { trackBuilds } from '../process/build-tracker.js';
 import { buildSnapshot, recentOutput } from './snapshot.js';
 import { streamOrckitEvents } from './events.js';
 import { resolveStaticDir, serveStaticAsset } from './static.js';
 import type { IdeLink } from './ide.js';
+import { isUnderRoot, openFile } from './open.js';
 
 export interface WebUiServerOptions {
   /** Port to bind. Use 0 for an arbitrary free port. */
@@ -24,6 +24,11 @@ export interface WebUiServerOptions {
    * logs and errors become IDE deep links (built-in server). Null disables it.
    */
   ide?: IdeLink | null;
+  /**
+   * Mac-side open relay URL (sandbox mode). When set, `/api/open` forwards
+   * there instead of launching anything itself.
+   */
+  openRelay?: string;
 }
 
 export interface WebUiServerHandle {
@@ -55,6 +60,7 @@ export async function attachWebUi(
 ): Promise<WebUiServerHandle> {
   const host = opts.host ?? '127.0.0.1';
   const ide = opts.ide ?? null;
+  const openRelay = opts.openRelay;
   const staticDir = resolveStaticDir();
 
   // Track last error per process so the initial snapshot can surface it
@@ -168,15 +174,20 @@ export async function attachWebUi(
         sendJson(res, 404, { error: `file not found: ${file}` });
         return;
       }
-      // Files inside the IDE project root open in the IDE; anything else (temp
-      // files, paths outside the project) opens in the OS default application.
-      const inProject = isUnderRoot(file, ide.root);
+      if (openRelay) {
+        // Sandboxed: this process runs in a Linux container and can't reach
+        // the Mac's IDE. The host-side `orc start` relays the open (same
+        // paths on both sides, so nothing is translated).
+        await relayOpen(res, openRelay, { file, line, column });
+        return;
+      }
       try {
-        if (inProject) await openInIde(ide.command, file, line, column);
-        else await openWithDefaultApp(file);
-        sendJson(res, 200, { ok: true, openedWith: inProject ? ide.command : 'default app' });
+        const openedWith = await openFile(ide, file, line, column);
+        sendJson(res, 200, { ok: true, openedWith });
       } catch (err) {
-        const what = inProject ? `IDE launcher "${ide.command}"` : 'the default application';
+        const what = isUnderRoot(file, ide.root)
+          ? `IDE launcher "${ide.command}"`
+          : 'the default application';
         sendJson(res, 502, { error: `couldn't open with ${what}: ${(err as Error).message}` });
       }
       return;
@@ -281,65 +292,25 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/**
- * Open a file in the user's IDE by running its command-line launcher detached:
- *   <command> [--line N] [--column C] <file>
- * Args are passed as an array (no shell), so the browser-supplied `file` can't
- * inject a command.
- */
-function openInIde(
-  command: string,
-  file: string,
-  line: string | null,
-  column: string | null,
+/** Forward an open request to the sandbox's Mac-side relay and mirror its answer. */
+async function relayOpen(
+  res: ServerResponse,
+  relay: string,
+  query: { file: string; line: string | null; column: string | null },
 ): Promise<void> {
-  const args: string[] = [];
-  if (line && /^\d+$/.test(line)) args.push('--line', line);
-  if (column && /^\d+$/.test(column)) args.push('--column', column);
-  args.push(file);
-  return spawnDetached(command, args);
-}
-
-/** Open a file in the OS default application (for files outside the project). */
-function openWithDefaultApp(file: string): Promise<void> {
-  const [command, args] = defaultOpenCommand(process.platform, file);
-  return spawnDetached(command, args);
-}
-
-/**
- * The OS default-open command + args for a file. Exposed for unit testing.
- *   - macOS:   `open <file>`
- *   - Windows: `cmd /c start "" <file>`  (empty title arg avoids quoting issues)
- *   - other:   `xdg-open <file>`
- */
-export function defaultOpenCommand(platform: NodeJS.Platform, file: string): [string, string[]] {
-  if (platform === 'darwin') return ['open', [file]];
-  if (platform === 'win32') return ['cmd', ['/c', 'start', '', file]];
-  return ['xdg-open', [file]];
-}
-
-/**
- * True when `file` is the project `root` or sits inside it. Pure path math.
- * Exposed for unit testing.
- */
-export function isUnderRoot(file: string, root: string): boolean {
-  const rel = relative(root, file);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-/**
- * Spawn a detached child, resolving once it has spawned and rejecting if it
- * couldn't be launched (e.g. ENOENT — not on PATH).
- */
-function spawnDetached(command: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-    child.once('error', reject);
-    child.once('spawn', () => {
-      child.unref();
-      resolve();
-    });
-  });
+  const target = new URL(relay);
+  target.searchParams.set('file', query.file);
+  if (query.line) target.searchParams.set('line', query.line);
+  if (query.column) target.searchParams.set('column', query.column);
+  try {
+    const answer = await fetch(target, { method: 'POST', signal: AbortSignal.timeout(5000) });
+    const body: unknown = await answer
+      .json()
+      .catch(() => ({ error: `open relay answered ${answer.status}` }));
+    sendJson(res, answer.status, body);
+  } catch (err) {
+    sendJson(res, 502, { error: `open relay unreachable: ${(err as Error).message}` });
+  }
 }
 
 function listen(server: HttpServer, port: number, host: string): Promise<void> {

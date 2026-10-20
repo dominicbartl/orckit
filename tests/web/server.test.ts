@@ -4,12 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import { validateConfig } from '../../src/config/load.js';
-import {
-  attachWebUi,
-  defaultOpenCommand,
-  isUnderRoot,
-  type WebUiServerHandle,
-} from '../../src/web/server.js';
+import { attachWebUi, type WebUiServerHandle } from '../../src/web/server.js';
+import { defaultOpenCommand, isUnderRoot } from '../../src/web/open.js';
 
 describe('attachWebUi over HTTP', () => {
   let orckit: Orckit;

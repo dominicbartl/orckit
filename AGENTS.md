@@ -216,6 +216,21 @@ ide:
 
 Set `command` to match the user's IDE if it isn't WebStorm. If a user says clicks don't open anything, the usual fix is creating the launcher (IDE → Tools → "Create Command-Line Launcher") so `command` is on `PATH` — not a different config.
 
+## `sandbox` (top-level, optional)
+
+Add it when the user wants to run the same environment once per git worktree (parallel feature branches, agents working side by side). With the block present, `orc start` in a linked worktree runs the stack in an isolated OrbStack container reachable at `<worktree>.<project>.local`, on the same ports; the main checkout stays native. macOS + OrbStack only. Details and every field: [README.md → Worktree sandboxes](README.md#worktree-sandboxes).
+
+Shape the config for it:
+
+- `copy_files` for git-ignored files the stack needs (`.env.local` and friends) — a fresh worktree has none.
+- `copy_home` for CLI logins the processes use (`.config/stripe`, `.config/gcloud`).
+- `dockerfile` (starting `ARG ORCKIT_BASE` / `FROM ${ORCKIT_BASE}`) for tools the processes call that aren't Node: Java for Firebase emulators, a pinned CLI version matching the team's Macs.
+- pnpm projects: `supportedArchitectures` (`os: [current, linux]`) in the pnpm config, plus `mounts: [{ source: ~/Library/pnpm/store }]` and `env: { npm_config_store_dir: ~/Library/pnpm/store }`, so one `node_modules` serves Mac and sandbox.
+
+The app usually needs two changes too, which you should make or point out: dev servers with a Host-header check allow the sandbox hostname (`allowedHosts: [".local"]`), and browser-side URLs to local services derive from `location.hostname` rather than `localhost`. Memory is shared across all sandboxes (OrbStack's VM); a stack with several Angular/webpack dev servers needs ~10 GB.
+
+When you run `orc start` yourself in a worktree that has `sandbox:`, it runs sandboxed; `--no-sandbox` runs natively. Manage leftovers with `orc sandbox list | stop | rm | prune`.
+
 ## Environment and secrets
 
 `env` is a `{ KEY: value }` map merged into the spawned process's environment. **Do not put secrets in `env`** — the YAML is checked in. Tell the user to:
@@ -244,6 +259,7 @@ Set `command` to match the user's IDE if it isn't WebStorm. If a user says click
 9. A process whose `command` is a wrapper script (`pnpm foo` → `./scripts/foo`) that runs `docker run --name X` inside still needs `type: docker` + `container_name: X` — validation can only see the command string, so it cannot catch this one for you. Without it the container outlives the shutdown and keeps its ports bound.
 10. Hooks that "clean up a port" must never kill the holder of a *published container port* — that is the container platform's proxy (Docker Desktop, OrbStack), and killing it takes down the whole Docker daemon without freeing the port. Remove the container instead, or let `type: docker` do it.
 11. No secrets in `env`.
+12. With a `sandbox:` block: every git-ignored file a process reads is in `copy_files`, and every non-Node tool a process or hook calls (`java`, `stripe`, `gcloud`, …) is installed by `sandbox.dockerfile`.
 
 ## Programmatic API
 

@@ -18,6 +18,7 @@ install` hook bootstrap their dependencies on first run.
 | [`10-mcp`](10-mcp) | Built-in MCP server: `mcp:` YAML block, `claude mcp add --transport http`, the three read-only tools |
 | [`11-docker`](11-docker) | `type: docker` + `container_name` — auto orphan-cleanup before spawn, auto `docker rm -f` on shutdown |
 | [`12-angular`](12-angular) | `type: angular` — real `ng serve` app, build-output parser, `ready: http` |
+| [`13-sandbox`](13-sandbox) | `sandbox:` — one isolated OrbStack container per git worktree, same ports in each, `orc sandbox` commands |
 
 Run any example:
 

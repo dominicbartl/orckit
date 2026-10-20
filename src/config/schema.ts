@@ -282,6 +282,66 @@ const ideConfigSchema = z.object({
   command: z.string().min(1).default('webstorm'),
 });
 
+const sandboxMountSchema = z.object({
+  /** Host path. `~` expands to the home directory; relative paths resolve against the config dir. */
+  source: z.string().min(1),
+  /** Path inside the sandbox. Defaults to the same absolute path as `source`. */
+  target: z.string().min(1).optional(),
+  readonly: z.boolean().default(false),
+});
+
+export const sandboxConfigSchema = z.object({
+  /**
+   * When true (the default once a `sandbox:` block exists), `orc start` from a
+   * linked git worktree runs the whole environment inside an isolated OrbStack
+   * container with its own hostname, so every worktree can use the same ports.
+   * The main checkout always runs natively. `--sandbox` / `--no-sandbox`
+   * override this per run.
+   */
+  enabled: z.boolean().default(true),
+  /**
+   * Project Dockerfile layered on orckit's base image (node 22, docker,
+   * iptables). It must start with `ARG ORCKIT_BASE` + `FROM ${ORCKIT_BASE}`.
+   * Built without a context (no COPY), rebuilt when its content changes.
+   */
+  dockerfile: z.string().min(1).optional(),
+  /**
+   * Hostname the sandbox is reachable at from the Mac. `{name}` is the worktree
+   * name, `{project}` the config's `project`. The container is additionally
+   * reachable at `<container>.orb.local`.
+   */
+  domain: z.string().min(1).default('{name}.{project}.local'),
+  /**
+   * Paths (relative to the Mac home) copied into the sandbox's own home the
+   * first time it starts — CLI logins such as `.config/stripe`. A copy, not a
+   * mount: a logout or credential revoke inside one sandbox never reaches the
+   * Mac or another sandbox. `orc start --refresh-home` copies them again.
+   */
+  copy_home: z.array(z.string().min(1)).default([]),
+  /**
+   * Git-ignored files (relative to the repo root) copied from the main
+   * checkout into the worktree when missing there, e.g. `backend/.env.local`.
+   * A fresh worktree has none of them.
+   */
+  copy_files: z.array(z.string().min(1)).default([]),
+  /**
+   * Memory cap for the whole sandbox (Docker format: `8g`, `6144m`). Every
+   * sandbox shares OrbStack's VM memory; without a cap, one sandbox's build
+   * spike makes the kernel OOM-kill processes in *other* sandboxes too. With
+   * one, an overrun only hits the sandbox that caused it.
+   */
+  memory: z
+    .string()
+    .regex(/^\d+(\.\d+)?[bkmg]?$/i, 'use Docker memory notation, e.g. "8g" or "6144m"')
+    .optional(),
+  /** CPU cap for the whole sandbox (Docker `--cpus`, e.g. `4` or `2.5`). */
+  cpus: z.number().positive().optional(),
+  /** Extra bind mounts, e.g. a shared package-manager store. */
+  mounts: z.array(sandboxMountSchema).default([]),
+  /** Extra environment variables for the sandbox. `~` expands to the Mac home. */
+  env: z.record(z.string(), z.string()).default({}),
+});
+
 export const orckitConfigSchema = z
   .object({
     project: z.string().default('orckit'),
@@ -293,6 +353,8 @@ export const orckitConfigSchema = z
     mcp: mcpConfigSchema.default({ enabled: true, port: 7676, host: '127.0.0.1' }),
     web: webConfigSchema.default({ enabled: true, port: 7677, host: '127.0.0.1' }),
     ide: ideConfigSchema.default({ enabled: true, command: 'webstorm' }),
+    /** Absent → sandboxing is off unless `--sandbox` is passed. */
+    sandbox: sandboxConfigSchema.optional(),
   })
   .superRefine((data, ctx) => {
     // A required process can't depend on an optional one — if `optional: true`
@@ -330,3 +392,5 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type WebConfig = z.infer<typeof webConfigSchema>;
 export type IdeConfig = z.infer<typeof ideConfigSchema>;
+export type SandboxConfig = z.infer<typeof sandboxConfigSchema>;
+export type SandboxMount = z.infer<typeof sandboxMountSchema>;

@@ -1,0 +1,36 @@
+project: sandbox-demo
+
+# Worktree sandboxes. Run from a linked git worktree and the whole stack below
+# runs in an isolated OrbStack container reachable at
+# http://<worktree>.sandbox-demo.local — so several worktrees can each serve
+# :3000 and :6379 at the same time. From the main checkout it runs natively.
+sandbox:
+  # Git-ignored files a fresh worktree lacks, copied from the main checkout.
+  copy_files:
+    - examples/13-sandbox/.env.local
+  # Optional project tooling on top of orckit's base image (Node 22 + Docker).
+  # dockerfile: ./orckit.sandbox.Dockerfile
+  # CLI logins copied once into the sandbox's own home (never shared back).
+  # copy_home: [.config/stripe]
+
+processes:
+  # Its own Docker daemon runs inside the sandbox, so this container lands on
+  # the sandbox's network: every worktree gets its own redis on 6379.
+  redis:
+    type: docker
+    container_name: sandbox-demo-redis
+    command: docker run --rm --name=sandbox-demo-redis -p 6379:6379 redis:7-alpine
+    ready:
+      type: tcp
+      port: 6379
+      timeout_ms: 120000
+
+  # Bound to 127.0.0.1 on purpose: the sandbox routes its hostname to
+  # localhost, so no --host 0.0.0.0 is needed.
+  api:
+    command: node server.cjs
+    cwd: ./examples/13-sandbox
+    depends_on: [redis]
+    ready:
+      type: http
+      url: http://localhost:3000/

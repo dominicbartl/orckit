@@ -74,12 +74,22 @@ src/
                       # wait_for_build). wait_for_build long-polls process:build
                       # until the build settles (quiet-period debounce).
 
+  sandbox/            # worktree sandboxes — CLI-only, the orchestrator never sees them
+    worktree.ts       # detectWorktree (git rev-parse) + container/domain naming
+    docker-args.ts    # pure buildRunArgs / innerStartArgs (the `docker run` argv)
+    engine.ts         # docker calls: OrbStack check, image build (content-hashed
+                      # tags), labelled volumes, list/stop/rm sandboxes
+    run.ts            # shouldSandbox + runInSandbox: the Mac-side `orc start`
+    relay.ts          # Mac-side open relay for IDE links from inside a sandbox
+
   web/
     server.ts         # attachWebUi — HTTP listener for the browser dashboard
                       # (serves bundled SPA + SSE event stream + action API)
     events.ts         # streamOrckitEvents — pushes Orckit events over SSE
     snapshot.ts       # buildSnapshot — serializable view of Orckit state
     static.ts         # serveStaticAsset + resolveStaticDir for the SPA shell
+    open.ts           # openFile — IDE launcher vs OS default app (shared with
+                      # the sandbox relay)
     ide.ts            # detectIde — finds a .idea folder at/above the config and
                       # returns an IdeLink { command, root } (in the snapshot).
                       # The web UI's file links POST to /api/open, which opens
@@ -244,6 +254,36 @@ The snapshot also carries an `ide: IdeLink | null` field (just `{ command }`, th
 The frontend lives in **`packages/web-ui/`** (a pnpm workspace, `@orckit/web-ui`, private, not published). It's SolidJS + Vite + Tailwind v4. Build it with `pnpm build:web` from the root; the static assets get copied into the cli package's tarball so end users get one `npm i @orckit/cli` without needing to run two build systems.
 
 The `/sink` route is the design system kitchen sink — every component in every state with static fixtures. Keep it in sync when adding or modifying components in `packages/web-ui/src/components/`.
+
+## Worktree sandboxes: one `orc start`, two processes
+
+`orc start` in a linked git worktree with a `sandbox:` block never builds an
+`Orckit` on the Mac: `cli.ts` hands off to `sandbox/run.ts`, which `docker run`s
+the **same orckit package** (bind-mounted read-only) as the container's main
+process and waits. The inner `orc start` is the unchanged native code path —
+orchestration, teardown, session file, port checks all run inside. Keep it that
+way: sandbox behaviour belongs in `src/sandbox/`, `assets/sandbox/` and the
+CLI hand-off, not in the orchestrator.
+
+Invariants that hold it together:
+
+- **Same paths inside and out.** Worktree, `.git` common dir and orckit are
+  mounted at their Mac paths, so logs, IDE links and git's absolute worktree
+  pointers stay valid with no translation layer.
+- **`docker run`, never `docker exec`.** Only `docker run` proxies signals and
+  the TTY; that is what makes Ctrl-C / SIGTERM / SIGHUP reach the inner orc's
+  normal teardown. `--rm` + one container per sandbox makes `docker rm -f` a
+  complete kill switch (nested containers live in the sandbox's own dockerd).
+- **`ORCKIT_SANDBOX` set ⇒ never sandbox again** (no recursion); the inner orc
+  also reads `ORCKIT_SANDBOX_HOST` (URLs it prints), `ORCKIT_SANDBOX_IDE` and
+  `ORCKIT_OPEN_RELAY` (IDE links via the Mac-side relay, project files only).
+- **Reachability lives in the image**: `entrypoint.sh` DNATs eth0 → 127.0.0.1
+  (after Docker's own rule) and `gai.conf` resolves `localhost` IPv4-first, so
+  dev servers bound to localhost answer on the sandbox hostname.
+
+Re-verify a sandbox change end to end with a real worktree (`git worktree add`)
+on OrbStack: two sandboxes on the same ports, then Ctrl-C, SIGTERM and
+`orc sandbox stop`, and confirm `orc sandbox list` is empty afterwards.
 
 ## Adding a new feature
 

@@ -98,6 +98,19 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * When `pid` started (`ps -o lstart=`), or null if it isn't running. A pid plus
+ * its start time identifies a process across PID reuse.
+ */
+export function processStartTime(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'lstart='], (_err, stdout) => {
+      const line = (stdout ?? '').trim();
+      resolve(line === '' ? null : line);
+    });
+  });
+}
+
 function currentCommand(pid: number): Promise<string | null> {
   return new Promise((resolve) => {
     execFile('ps', ['-p', String(pid), '-o', 'command='], (_err, stdout) => {
