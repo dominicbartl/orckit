@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/dominicbartl/orckit/compare/v0.3.1...v0.4.0) (2026-10-20)
+
+
+### Features
+
+* give sandboxes their own node_modules (`sandbox.isolate_node_modules`) ([74ed19b](https://github.com/dominicbartl/orckit/commit/74ed19b902473d143f6e6a1441506aeb4e7dabd7))
+* sandbox the main checkout too with `sandbox.main_checkout` ([736d3ff](https://github.com/dominicbartl/orckit/commit/736d3ffb25bf641900f4c3e38107dc5b9ce3e1d5))
+* worktree sandboxes — run one isolated environment per git worktree ([d2f13e7](https://github.com/dominicbartl/orckit/commit/d2f13e7edb2f3186ec7cd9667c3584f9e72bc472))
+
+
+### Bug Fixes
+
+* mount orckit writable in a sandbox when the project links to it ([0caee58](https://github.com/dominicbartl/orckit/commit/0caee58eec9229a72bddcf202dfde2a4a16f90fc))
+* report a ready timeout as the failure, not the exit it causes ([07ba03b](https://github.com/dominicbartl/orckit/commit/07ba03b9471f11c32e01f67046c1d87dd1031e25))
+
 ## [0.3.1](https://github.com/dominicbartl/orckit/compare/v0.3.0...v0.3.1) (2026-08-20)
 
 
