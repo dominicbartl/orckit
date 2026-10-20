@@ -56,6 +56,14 @@ const SAMPLE_LINES: OutputLine[] = [
     stream: 'stdout',
     timestamp: Date.now() - 7500,
   },
+  {
+    // URLs link regardless of IDE detection; trailing prose punctuation and an
+    // unbalanced closing paren stay outside the link.
+    text: ' ⚠ Fast Refresh had to reload (https://nextjs.org/docs/messages/fast-refresh-reload).',
+    stream: 'stdout',
+    timestamp: Date.now() - 7000,
+    highlight: 'yellow',
+  },
   { text: ' ✓ Ready in 1.2s', stream: 'stdout', timestamp: Date.now() - 6800, highlight: 'green' },
   {
     text: 'warn  - Slow image route: /api/og-image (842ms)',
@@ -407,8 +415,8 @@ export default function Sink() {
         </Section>
 
         <Section
-          title="Log view — IDE deep links"
-          subtitle="When a JetBrains project is detected, file refs (e.g. lib/redis/connect.ts:42:18) become clickable — orckit opens them in your running IDE via its command-line launcher. Relative refs resolve against the process's cwd (here /Users/dev/acme-web/packages/api) into an absolute path."
+          title="Log view — IDE deep links + URLs"
+          subtitle="http(s) URLs always open in a new tab. When a JetBrains project is detected, file refs (e.g. lib/redis/connect.ts:42:18) also become clickable — orckit opens them in your running IDE via its command-line launcher. Relative refs resolve against the process's cwd (here /Users/dev/acme-web/packages/api) into an absolute path."
         >
           <div class="h-64">
             <LogView lines={() => SAMPLE_LINES} ide={SAMPLE_IDE} baseDir={SAMPLE_CWD} />

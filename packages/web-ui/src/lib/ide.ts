@@ -15,12 +15,21 @@ export function resolveFilePath(file: string, baseDir?: string): string {
 }
 
 /**
- * A run of plain text, or a file reference to render as a link. `file` is the
- * resolved (absolute, when possible) path; `line`/`col` are 1-based positions.
+ * A run of plain text, a file reference to render as an IDE link, or an
+ * http(s) URL to render as a regular anchor. `file` is the resolved (absolute,
+ * when possible) path; `line`/`col` are 1-based positions.
  */
 export type Segment =
   | { kind: 'text'; text: string }
-  | { kind: 'link'; text: string; file: string; line?: number; col?: number };
+  | { kind: 'link'; text: string; file: string; line?: number; col?: number }
+  | { kind: 'url'; text: string; href: string };
+
+/**
+ * http(s) URL: scheme, then everything up to whitespace or a quote/bracket
+ * that can't appear unescaped in a URL. Trailing sentence punctuation is
+ * trimmed afterwards by {@link trimUrl}.
+ */
+const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/g;
 
 /**
  * Path-like token: a sequence of path chars containing at least one `/` or a
@@ -34,13 +43,60 @@ const FILE_RE =
   /(^|[\s('"[@])((?:\.{0,2}\/)?(?:[\w.@~-]+\/)+[\w.@~-]+\.[\w]{1,6}|\.{1,2}\/[\w.@~/-]+\.[\w]{1,6})(?::(\d+)(?::(\d+))?|\((\d+),(\d+)\))?/g;
 
 /**
- * Split a line of output into plain-text and file-link segments. When `ide` is
- * null nothing is linkified — the whole line is one text segment. `baseDir` is
- * the emitting process's working directory; relative file refs resolve against
- * it (see {@link resolveFilePath}).
+ * Split a line of output into plain-text, URL and file-link segments. http(s)
+ * URLs are always linkified; file refs only when `ide` is non-null. `baseDir`
+ * is the emitting process's working directory; relative file refs resolve
+ * against it (see {@link resolveFilePath}).
  */
 export function linkifyOutput(text: string, ide: IdeLink | null, baseDir?: string): Segment[] {
-  if (!ide || !text) return [{ kind: 'text', text }];
+  if (!text) return [{ kind: 'text', text }];
+
+  // URLs first, so a path inside one (`http://host/src/app.ts`) is never
+  // mistaken for a file ref; the gaps between them go through linkifyFiles.
+  const segments: Segment[] = [];
+  let last = 0;
+  // Reset lastIndex — the regex is shared (global) across calls.
+  URL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = URL_RE.exec(text)) != null) {
+    const href = trimUrl(m[0]);
+    if (m.index > last) segments.push(...linkifyFiles(text.slice(last, m.index), ide, baseDir));
+    segments.push({ kind: 'url', text: href, href });
+    last = m.index + href.length;
+    URL_RE.lastIndex = last;
+  }
+  if (last < text.length) segments.push(...linkifyFiles(text.slice(last), ide, baseDir));
+  return segments;
+}
+
+/**
+ * Drop trailing punctuation that almost always belongs to the surrounding
+ * prose (`see http://x.dev/docs.`), and a closing `)`/`]` only when it has no
+ * opening partner inside the URL (`(http://x.dev)` vs `…/Foo_(bar)`).
+ */
+function trimUrl(url: string): string {
+  for (;;) {
+    const ch = url.at(-1);
+    if (ch && '.,;:!?'.includes(ch)) {
+      url = url.slice(0, -1);
+    } else if (
+      (ch === ')' && count(url, '(') < count(url, ')')) ||
+      (ch === ']' && count(url, '[') < count(url, ']'))
+    ) {
+      url = url.slice(0, -1);
+    } else {
+      return url;
+    }
+  }
+}
+
+function count(s: string, ch: string): number {
+  return s.split(ch).length - 1;
+}
+
+/** File-ref pass of {@link linkifyOutput}, over a URL-free run of text. */
+function linkifyFiles(text: string, ide: IdeLink | null, baseDir?: string): Segment[] {
+  if (!ide) return [{ kind: 'text', text }];
 
   const segments: Segment[] = [];
   let last = 0;

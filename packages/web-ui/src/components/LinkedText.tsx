@@ -6,9 +6,9 @@ import { useToastsOptional } from '../lib/toasts';
 import { cx } from '../lib/cx';
 
 interface LinkedTextProps {
-  /** Raw text to render; file references become IDE deep links. */
+  /** Raw text to render; file refs become IDE deep links, URLs become anchors. */
   text: string;
-  /** IDE descriptor, or null to render plain text with no links. */
+  /** IDE descriptor, or null to leave file refs as plain text (URLs still link). */
   ide: IdeLink | null;
   /** Emitting process's working dir; relative file refs resolve against it. */
   baseDir?: string;
@@ -19,7 +19,8 @@ interface LinkedTextProps {
 /**
  * Render a line of process output, turning file references (e.g.
  * `src/app.ts:42:10`) into clickable links that open the file in the running
- * JetBrains IDE. Falls back to plain text when no IDE was detected.
+ * JetBrains IDE, and http(s) URLs into anchors that open in a new tab. File
+ * refs fall back to plain text when no IDE was detected.
  *
  * Clicking POSTs to orckit's `/api/open` (same origin), which opens the file
  * server-side — the browser can't shell out itself. orckit routes it: files
@@ -44,10 +45,28 @@ export function LinkedText(props: LinkedTextProps) {
     });
   };
 
+  const linkClass = () =>
+    cx(
+      'underline decoration-dotted underline-offset-2 hover:decoration-solid',
+      'text-hl-blue hover:text-accent cursor-pointer',
+      props.linkClass,
+    );
+
   return (
     <For each={segments()}>
       {(seg) =>
-        seg.kind === 'link' ? (
+        seg.kind === 'url' ? (
+          <a
+            href={seg.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${seg.href}`}
+            onClick={(e) => e.stopPropagation()}
+            class={linkClass()}
+          >
+            {seg.text}
+          </a>
+        ) : seg.kind === 'link' ? (
           <span
             role="button"
             tabindex={0}
@@ -62,11 +81,7 @@ export function LinkedText(props: LinkedTextProps) {
               e.stopPropagation();
               open(seg.file, seg.line, seg.col);
             }}
-            class={cx(
-              'underline decoration-dotted underline-offset-2 hover:decoration-solid',
-              'text-hl-blue hover:text-accent cursor-pointer',
-              props.linkClass,
-            )}
+            class={linkClass()}
           >
             {seg.text}
           </span>
