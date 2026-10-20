@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { validateConfig } from '../../src/config/load.js';
-import { expandPath, shouldSandbox } from '../../src/sandbox/run.js';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expandPath, linksPackage, shouldSandbox } from '../../src/sandbox/run.js';
 
 const wt = { id: 'wt1', root: '/r/wt1', commonDir: '/r/.git', mainRoot: '/r', linked: true };
 const main = { id: 'main', root: '/r', commonDir: '/r/.git', mainRoot: '/r', linked: false };
@@ -97,5 +100,23 @@ describe('expandPath', () => {
     expect(expandPath('~/x/y', '/b', '/h')).toBe('/h/x/y');
     expect(expandPath('rel/z', '/b', '/h')).toBe('/b/rel/z');
     expect(expandPath('/abs', '/b', '/h')).toBe('/abs');
+  });
+});
+
+describe('linksPackage', () => {
+  it('is true only when node_modules/@orckit/cli resolves to the running orckit', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orckit-link-')));
+    try {
+      const orckit = join(dir, 'orckit');
+      const project = join(dir, 'project');
+      mkdirSync(orckit);
+      mkdirSync(join(project, 'node_modules', '@orckit'), { recursive: true });
+      expect(linksPackage(project, orckit)).toBe(false);
+      symlinkSync(orckit, join(project, 'node_modules', '@orckit', 'cli'));
+      expect(linksPackage(project, orckit)).toBe(true);
+      expect(linksPackage(project, join(dir, 'other'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

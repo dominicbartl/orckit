@@ -271,7 +271,9 @@ Invariants that hold it together:
 
 - **Same paths inside and out.** Worktree, `.git` common dir and orckit are
   mounted at their Mac paths, so logs, IDE links and git's absolute worktree
-  pointers stay valid with no translation layer.
+  pointers stay valid with no translation layer. orckit is read-only unless
+  the project's `node_modules/@orckit/cli` links to it (local `link:` dev
+  setup), whose install inside the sandbox chmods its bin.
 - **`docker run`, never `docker exec`.** Only `docker run` proxies signals and
   the TTY; that is what makes Ctrl-C / SIGTERM / SIGHUP reach the inner orc's
   normal teardown. `--rm` + one container per sandbox makes `docker rm -f` a

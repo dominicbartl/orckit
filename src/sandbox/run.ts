@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { sandboxConfigSchema, type OrckitConfig, type SandboxConfig } from '../config/schema.js';
@@ -137,13 +137,15 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
     env.ORCKIT_SANDBOX_IDE = JSON.stringify(req.ide);
   }
 
+  const orckitRoot = packageRoot();
   const args = buildRunArgs({
     name,
     domain,
     image,
     project: req.config.project,
     checkout,
-    packageRoot: packageRoot(),
+    packageRoot: orckitRoot,
+    packageWritable: linksPackage(checkout.root, orckitRoot),
     configPath: req.configPath,
     cwd,
     tty: Boolean(process.stdin.isTTY && process.stdout.isTTY),
@@ -191,6 +193,19 @@ async function clearLeftover(name: string, req: SandboxRunRequest): Promise<void
     );
   }
   await removeSandbox(name);
+}
+
+/**
+ * True when the checkout's own `node_modules/@orckit/cli` resolves to the
+ * orckit we run (a `link:` to a local orckit checkout). The project's install
+ * inside the sandbox then writes to that package, so it can't be read-only.
+ */
+export function linksPackage(checkoutRoot: string, orckitRoot: string): boolean {
+  try {
+    return realpathSync(join(checkoutRoot, 'node_modules', '@orckit', 'cli')) === orckitRoot;
+  } catch {
+    return false;
+  }
 }
 
 /** sandbox.copy_files: bring git-ignored files from the main checkout into a fresh worktree. */

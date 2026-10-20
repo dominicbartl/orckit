@@ -485,7 +485,8 @@ and refuses otherwise; pass `--no-sandbox` to run natively.
 across branch switches) names the sandbox; the main checkout's sandbox is `main`. orckit builds an image (its base:
 Node 22 + a private Docker daemon; your `sandbox.dockerfile` on top, rebuilt
 when it changes), mounts the worktree, the repository's `.git` and orckit
-itself at the **same paths**, and runs the same `orc start` inside as the
+itself at the **same paths** (orckit read-only, unless the project links to
+that orckit checkout via `link:`), and runs the same `orc start` inside as the
 container's main process. Inside, everything works as natively: `type: docker`
 processes start their containers in the sandbox's own Docker daemon, on the
 sandbox's network. On the Mac side, `orc start` just forwards your terminal and

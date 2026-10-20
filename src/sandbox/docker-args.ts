@@ -11,8 +11,14 @@ export interface SandboxRunSpec {
   image: string;
   project: string;
   checkout: Checkout;
-  /** Root of the orckit package to run inside — mounted read-only at the same path. */
+  /** Root of the orckit package to run inside — mounted at the same path. */
   packageRoot: string;
+  /**
+   * Mount `packageRoot` writable. Only when the project itself links to it
+   * (a local `link:` dev setup): its package manager then installs into it and
+   * chmods its bin, which fails on a read-only mount.
+   */
+  packageWritable: boolean;
   /** Absolute path of the config file (same path inside the sandbox). */
   configPath: string;
   /** Working directory inside the sandbox. */
@@ -100,7 +106,7 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
   };
   bind(checkout.root, checkout.root, false);
   bind(checkout.commonDir, checkout.commonDir, false);
-  bind(spec.packageRoot, spec.packageRoot, true);
+  bind(spec.packageRoot, spec.packageRoot, !spec.packageWritable);
 
   // Per-sandbox state that must survive restarts: the inner Docker image cache
   // and the sandbox's own home (seeded logins, corepack/pnpm caches).

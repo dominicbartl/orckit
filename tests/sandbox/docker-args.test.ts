@@ -18,6 +18,7 @@ const spec = (over: Partial<SandboxRunSpec> = {}): SandboxRunSpec => ({
     linked: true,
   },
   packageRoot: '/opt/orckit',
+  packageWritable: false,
   configPath: '/repo/.claude/worktrees/wt1/orckit.yaml',
   cwd: '/repo/.claude/worktrees/wt1',
   tty: true,
@@ -95,6 +96,12 @@ describe('buildRunArgs', () => {
     };
     const v = values(buildRunArgs(spec({ checkout: main, name: 'orckit-app-main' })), '-v');
     expect(v.slice(0, 2)).toEqual(['/repo:/repo', '/opt/orckit:/opt/orckit:ro']);
+  });
+
+  it('mounts orckit writable only when the project links to it', () => {
+    expect(values(buildRunArgs(spec({ packageWritable: true })), '-v')).toContain(
+      '/opt/orckit:/opt/orckit',
+    );
   });
 
   it('skips mounts already covered by a parent mount', () => {
