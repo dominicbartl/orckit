@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRunArgs,
+  nodeModulesVolume,
   innerStartArgs,
   type SandboxRunSpec,
 } from '../../src/sandbox/docker-args.js';
@@ -23,6 +24,7 @@ const spec = (over: Partial<SandboxRunSpec> = {}): SandboxRunSpec => ({
   cwd: '/repo/.claude/worktrees/wt1',
   tty: true,
   homeSeeds: [{ source: '/Users/me/.config/stripe', rel: '.config/stripe' }],
+  packageDirs: [],
   mounts: [],
   env: { FOO: 'bar' },
   clientPid: 4242,
@@ -96,6 +98,17 @@ describe('buildRunArgs', () => {
     };
     const v = values(buildRunArgs(spec({ checkout: main, name: 'orckit-app-main' })), '-v');
     expect(v.slice(0, 2)).toEqual(['/repo:/repo', '/opt/orckit:/opt/orckit:ro']);
+  });
+
+  it('gives every package dir a private node_modules volume', () => {
+    const v = values(buildRunArgs(spec({ packageDirs: ['', 'backend'] })), '-v');
+    expect(v).toContain('orckit-app-wt1-nm-root:/repo/.claude/worktrees/wt1/node_modules');
+    expect(v).toContain(
+      `${nodeModulesVolume('orckit-app-wt1', 'backend')}:/repo/.claude/worktrees/wt1/backend/node_modules`,
+    );
+    expect(nodeModulesVolume('orckit-app-wt1', 'backend')).toMatch(
+      /^orckit-app-wt1-nm-[0-9a-f]{10}$/,
+    );
   });
 
   it('mounts orckit writable only when the project links to it', () => {

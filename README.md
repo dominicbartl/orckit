@@ -245,6 +245,9 @@ sandbox:                     # optional; see "Worktree sandboxes". Present →
   copy_home: [.config/stripe]       # Mac-home paths (CLI logins) copied into the
                              #   sandbox's own home: once, again when this list
                              #   changes, or with --refresh-home. Never shared back.
+  isolate_node_modules: true # default: true. Private node_modules volume per
+                             #   package dir (Linux binaries in the sandbox,
+                             #   the Mac's node_modules untouched)
   mounts:                    # extra bind mounts (same path inside by default)
     - source: ~/Library/pnpm/store
       target: ~/Library/pnpm/store   # optional
@@ -503,11 +506,14 @@ teardown inside. Nothing is published on the Mac's localhost.
 - **Browser-side URLs.** A frontend that hardcodes `http://localhost:<port>`
   for its API makes the browser call the *Mac's* localhost — another stack.
   Derive such URLs from `location.hostname` instead.
-- **`node_modules` is shared with the Mac.** Install inside the sandbox with
-  pnpm `supportedArchitectures` covering both platforms (`os: [current, linux]`)
-  and mount the Mac's pnpm store at the same path, so Mac tooling keeps working
-  in that worktree. Native addons that download their binary in an install
-  script (e.g. `re2`) still end up built for whichever platform installed last.
+- **The sandbox has its own `node_modules`.** Every directory with a
+  `package.json` gets a private volume over its `node_modules`, so installs
+  inside get Linux binaries (esbuild, swc, sharp, …) while the Mac's
+  `node_modules` stays as it is — both sides keep working. The first start
+  therefore installs from scratch; mount the Mac's package store (e.g.
+  `~/Library/pnpm/store` plus `npm_config_store_dir`) so that's a copy, not a
+  download. `isolate_node_modules: false` shares the Mac's `node_modules`
+  instead (only safe without native tooling).
 - **Memory.** All sandboxes share OrbStack's VM memory (OrbStack Settings →
   System → Memory). When it runs out, the kernel kills the largest processes,
   in *any* sandbox. Size the VM for the stacks you run at once, start subsets

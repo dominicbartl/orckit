@@ -169,8 +169,12 @@ export async function removeSandbox(name: string): Promise<void> {
  * the volumes — the labels are what lets `orc sandbox list` show a stopped
  * sandbox and `orc sandbox prune` reclaim it once the worktree is deleted.
  */
-export async function ensureSandboxVolumes(name: string, worktreeRoot: string): Promise<void> {
-  for (const volume of sandboxVolumes(name)) {
+export async function ensureSandboxVolumes(
+  name: string,
+  worktreeRoot: string,
+  extra: string[] = [],
+): Promise<void> {
+  for (const volume of [...sandboxVolumes(name), ...extra]) {
     await docker([
       'volume',
       'create',
@@ -201,7 +205,15 @@ export async function listSandboxVolumes(): Promise<Map<string, string>> {
   return byName;
 }
 
-/** Remove a sandbox's state volumes (inner image cache + home). */
+/** Remove all of a sandbox's volumes (image cache, home, node_modules). */
 export async function removeSandboxVolumes(name: string): Promise<void> {
-  await docker(['volume', 'rm', '-f', ...sandboxVolumes(name)]);
+  const labelled = await docker([
+    'volume',
+    'ls',
+    '-q',
+    '--filter',
+    `label=${SANDBOX_LABEL}=${name}`,
+  ]);
+  const volumes = new Set([...sandboxVolumes(name), ...(labelled ? labelled.split('\n') : [])]);
+  await docker(['volume', 'rm', '-f', ...volumes]);
 }

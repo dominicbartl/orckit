@@ -80,6 +80,7 @@ src/
     docker-args.ts    # pure buildRunArgs / innerStartArgs (the `docker run` argv)
     engine.ts         # docker calls: OrbStack check, image build (content-hashed
                       # tags), labelled volumes, list/stop/rm sandboxes
+    packages.ts       # findPackageDirs — where node_modules volumes go
     run.ts            # shouldSandbox + runInSandbox: the Mac-side `orc start`
     relay.ts          # Mac-side open relay for IDE links from inside a sandbox
 
@@ -278,6 +279,10 @@ Invariants that hold it together:
   the TTY; that is what makes Ctrl-C / SIGTERM / SIGHUP reach the inner orc's
   normal teardown. `--rm` + one container per sandbox makes `docker rm -f` a
   complete kill switch (nested containers live in the sandbox's own dockerd).
+- **Own `node_modules`.** A private volume sits over every package dir's
+  `node_modules` (found from `package.json`, so fresh worktrees are covered):
+  install steps drop native executables (esbuild's bin is a Mach-O on the Mac),
+  so the two platforms must never share one.
 - **`ORCKIT_SANDBOX` set ⇒ never sandbox again** (no recursion); the inner orc
   also reads `ORCKIT_SANDBOX_HOST` (URLs it prints), `ORCKIT_SANDBOX_IDE` and
   `ORCKIT_OPEN_RELAY` (IDE links via the Mac-side relay, project files only).

@@ -5,7 +5,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { sandboxConfigSchema, type OrckitConfig, type SandboxConfig } from '../config/schema.js';
 import type { IdeLink } from '../web/ide.js';
 import { isUnderRoot } from '../web/open.js';
-import { buildRunArgs, innerStartArgs } from './docker-args.js';
+import { buildRunArgs, innerStartArgs, nodeModulesVolume } from './docker-args.js';
+import { findPackageDirs } from './packages.js';
 import { isAlive, processStartTime } from '../util/session-state.js';
 import {
   ensureImage,
@@ -94,7 +95,12 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
   const domain = sandboxDomain(sandbox.domain, req.config.project, checkout.id);
 
   await clearLeftover(name, req);
-  await ensureSandboxVolumes(name, checkout.root);
+  const packageDirs = sandbox.isolate_node_modules ? findPackageDirs(checkout.root) : [];
+  await ensureSandboxVolumes(
+    name,
+    checkout.root,
+    packageDirs.map((dir) => nodeModulesVolume(name, dir)),
+  );
   copyMissingFiles(sandbox.copy_files, checkout, req);
 
   const image = await ensureImage({
@@ -152,6 +158,7 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
     memory: sandbox.memory,
     cpus: sandbox.cpus,
     homeSeeds,
+    packageDirs,
     mounts,
     env,
     clientPid: process.pid,

@@ -306,6 +306,14 @@ export const sandboxConfigSchema = z.object({
    */
   main_checkout: z.boolean().default(false),
   /**
+   * Give the sandbox its own `node_modules` (a private volume over every
+   * package directory's `node_modules`) instead of the Mac's. Installs inside
+   * then get Linux binaries — esbuild, swc, sharp and anything else whose
+   * install step drops in a native executable — while the Mac's `node_modules`
+   * stays untouched. The first start installs from scratch.
+   */
+  isolate_node_modules: z.boolean().default(true),
+  /**
    * Project Dockerfile layered on orckit's base image (node 22, docker,
    * iptables). It must start with `ARG ORCKIT_BASE` + `FROM ${ORCKIT_BASE}`.
    * Built without a context (no COPY), rebuilt when its content changes.

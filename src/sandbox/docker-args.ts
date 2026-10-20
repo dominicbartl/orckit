@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { isUnderRoot } from '../web/open.js';
 import type { Checkout } from './worktree.js';
@@ -30,6 +31,11 @@ export interface SandboxRunSpec {
   cpus?: number;
   /** Mac-home paths seeded into the sandbox home on first start. */
   homeSeeds: Array<{ source: string; rel: string }>;
+  /**
+   * Package dirs (relative to the checkout root) whose `node_modules` gets a
+   * sandbox-private volume instead of the Mac's directory.
+   */
+  packageDirs: string[];
   mounts: Array<{ source: string; target: string; readonly: boolean }>;
   env: Record<string, string>;
   /**
@@ -53,6 +59,14 @@ export const PROJECT_LABEL = 'orckit.project';
 /** A sandbox's persistent volumes: the inner Docker image cache and its home. */
 export function sandboxVolumes(name: string): [docker: string, home: string] {
   return [`${name}-docker`, `${name}-home`];
+}
+
+/** The private volume backing `<packageDir>/node_modules` in a sandbox. */
+export function nodeModulesVolume(name: string, packageDir: string): string {
+  const id = packageDir
+    ? createHash('sha256').update(packageDir).digest('hex').slice(0, 10)
+    : 'root';
+  return `${name}-nm-${id}`;
 }
 
 /** Mount point of the Mac-home seed copies inside the sandbox. */
@@ -115,6 +129,14 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
   args.push('-v', `${homeVolume}:/root`);
   for (const seed of spec.homeSeeds) {
     args.push('-v', `${seed.source}:${join(SEED_DIR, seed.rel)}:ro`);
+  }
+  // Over the checkout mount: the sandbox's own node_modules (Linux binaries),
+  // so neither side ever runs the other platform's native executables.
+  for (const dir of spec.packageDirs) {
+    args.push(
+      '-v',
+      `${nodeModulesVolume(spec.name, dir)}:${join(checkout.root, dir, 'node_modules')}`,
+    );
   }
   for (const m of spec.mounts) bind(m.source, m.target, m.readonly);
 

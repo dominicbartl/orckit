@@ -73,6 +73,7 @@ describe('sandbox schema defaults', () => {
     expect(withBlock.sandbox).toEqual({
       enabled: true,
       main_checkout: false,
+      isolate_node_modules: true,
       domain: '{name}.{project}.local',
       copy_home: [],
       copy_files: [],
