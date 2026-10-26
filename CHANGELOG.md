@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/dominicbartl/orckit/compare/v0.4.0...v0.5.0) (2026-10-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* orckit now requires Node 22 or newer.
+
+### Features
+
+* **web-ui:** make http(s) URLs in process output clickable ([ad239f2](https://github.com/dominicbartl/orckit/commit/ad239f20e4fe5b0444b8f2c6cf6a1de97432c218))
+
+
+### Bug Fixes
+
+* report the installed version in `orc --version` and the MCP server ([8ff86f2](https://github.com/dominicbartl/orckit/commit/8ff86f26a6a09109796247a3abb79d2876467678))
+* run a registry-installed orckit inside a sandbox ([7ce0388](https://github.com/dominicbartl/orckit/commit/7ce0388b268cbb1efbe3c326074fac1fa7461d5a))
+
+
+### Build System
+
+* require Node 22 ([c1878a0](https://github.com/dominicbartl/orckit/commit/c1878a05f60306353761cb9e97ef90d673516ba3))
+
 ## [0.4.0](https://github.com/dominicbartl/orckit/compare/v0.3.1...v0.4.0) (2026-10-20)
 
 
