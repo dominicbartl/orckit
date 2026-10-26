@@ -48,7 +48,7 @@ pnpm add -D @orckit/cli
 npm i -D @orckit/cli
 ```
 
-Requires Node 20+.
+Requires Node 22+.
 
 ## Quick start
 
