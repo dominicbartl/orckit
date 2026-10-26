@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, ConfigError } from './config/load.js';
 import type { OrckitConfig } from './config/schema.js';
@@ -37,7 +37,10 @@ import { attachDashboard, type DashboardHandle, type DashboardLink } from './rep
 import { buildGraph, filterToTargets } from './graph/resolver.js';
 import { containerName, detectCheckout } from './sandbox/worktree.js';
 import { runInSandbox, shouldSandbox } from './sandbox/run.js';
+import { dnsStatus, installDns, RESOLVER_FILE, uninstallDns } from './sandbox/dns-resolver.js';
+import { DEFAULT_DNS_PORT, testAlias } from './sandbox/dns.js';
 import {
+  listSandboxDomains,
   listSandboxes,
   listSandboxVolumes,
   removeSandbox,
@@ -790,6 +793,85 @@ sandboxCmd
         }
       }
       if (stale.length === 0) console.log(chalk.dim('  nothing to prune'));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const dnsCmd = sandboxCmd
+  .command('dns')
+  .description('`.test` hostnames for sandboxes (one-time macOS resolver setup)');
+
+const parsePort = (value: string) => {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new InvalidArgumentError('expected a port number (1-65535)');
+  }
+  return port;
+};
+
+dnsCmd
+  .command('install')
+  .description(`Route .test to running sandboxes (writes ${RESOLVER_FILE} via sudo)`)
+  .option('--port <port>', 'forwarder port on 127.0.0.1', parsePort, DEFAULT_DNS_PORT)
+  .option('--force', `replace a ${RESOLVER_FILE} orckit didn't write`, false)
+  .action(async (opts: { port: number; force: boolean }) => {
+    try {
+      await installDns({ ...opts, log: (msg) => console.log(chalk.dim(`  ${msg}`)) });
+      console.log(chalk.green('  ✓ .test names are live'));
+      console.log(
+        chalk.dim('  sandboxes started from now on also answer at <x>.test for their <x>.local'),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+dnsCmd
+  .command('uninstall')
+  .description(`Remove orckit's ${RESOLVER_FILE} (via sudo)`)
+  .action(async () => {
+    try {
+      const removed = await uninstallDns((msg) => console.log(chalk.dim(`  ${msg}`)));
+      console.log(
+        removed
+          ? chalk.green('  ✓ .test routing removed')
+          : chalk.dim(`  no orckit-managed ${RESOLVER_FILE} — nothing to remove`),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+dnsCmd
+  .command('status')
+  .description("Check .test routing and list the running sandboxes' .test names")
+  .action(async () => {
+    try {
+      const status = await dnsStatus();
+      const line = (ok: boolean, text: string) =>
+        console.log(`  ${ok ? chalk.green('✓') : chalk.red('✗')} ${text}`);
+      if (status.port === null) {
+        line(false, `${RESOLVER_FILE} (not installed) — run \`orc sandbox dns install\``);
+        process.exitCode = 1;
+        return;
+      }
+      line(true, `${RESOLVER_FILE} → 127.0.0.1:${status.port}`);
+      line(status.systemRoutes, 'macOS routes .test to it');
+      if (status.error) console.log(chalk.yellow(`  ${status.error}`));
+      console.log(
+        chalk.dim(
+          status.serving
+            ? '  forwarder: served by a running sandbox'
+            : '  forwarder: idle (starts with the next sandbox)',
+        ),
+      );
+      const domains = await listSandboxDomains().catch(() => []);
+      for (const domain of domains) {
+        const alias = testAlias(domain);
+        if (alias) console.log(`  ${chalk.cyan(alias)}  ${chalk.dim(`→ ${domain}`)}`);
+      }
+      if (!status.systemRoutes) process.exitCode = 1;
     } catch (err) {
       fail(err);
     }

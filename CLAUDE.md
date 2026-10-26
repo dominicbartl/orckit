@@ -88,6 +88,12 @@ src/
     packages.ts       # findPackageDirs — where node_modules volumes go
     run.ts            # shouldSandbox + runInSandbox: the Mac-side `orc start`
     relay.ts          # Mac-side open relay for IDE links from inside a sandbox
+    dns.ts            # `.test` forwarder: tiny UDP DNS server answering
+                      # <x>.test with the IP of <x>.local (running sandboxes
+                      # only). Runs in each Mac-side `orc start` as a standby:
+                      # one binds the port, the rest retry and take over
+    dns-resolver.ts   # `orc sandbox dns install|uninstall|status`: the
+                      # /etc/resolver/test file (sudo) + routing checks
 
   web/
     server.ts         # attachWebUi — HTTP listener for the browser dashboard
@@ -300,6 +306,12 @@ Invariants that hold it together:
 - **Reachability lives in the image**: `entrypoint.sh` DNATs eth0 → 127.0.0.1
   (after Docker's own rule) and `gai.conf` resolves `localhost` IPv4-first, so
   dev servers bound to localhost answer on the sandbox hostname.
+- **`.test` names without a daemon.** OrbStack only serves `.local`; the
+  one-time `orc sandbox dns install` writes `/etc/resolver/test`, and the
+  forwarder (`sandbox/dns.ts`) lives in the Mac-side `orc start` for the
+  sandbox's lifetime — standby/takeover between concurrent sandboxes, not a
+  launchd agent. The container label stays `.local`; only
+  `ORCKIT_SANDBOX_HOST` (the printed URLs) switches to `.test`.
 
 Re-verify a sandbox change end to end with a real worktree (`git worktree add`)
 on OrbStack: two sandboxes on the same ports, then Ctrl-C, SIGTERM and

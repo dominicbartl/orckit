@@ -92,6 +92,7 @@ npx orc start --kill-blocked-ports    # free required ports without asking
 npx orc start --fail-on-blocked-ports # abort if a required port is taken
 npx orc start --no-sandbox      # where `sandbox:` would sandbox this run: run natively
 npx orc sandbox list            # sandboxes (see "Worktree sandboxes")
+npx orc sandbox dns install     # once: sandboxes also answer at <name>.<project>.test
 ```
 
 Ctrl-C triggers graceful shutdown (SIGTERM → per-process `stop_grace_ms`, default 10s → SIGKILL).
@@ -239,7 +240,9 @@ sandbox:                     # optional; see "Worktree sandboxes". Present →
                              #   when its content changes.
   domain: '{name}.{project}.local'  # default. Hostname the Mac reaches the
                              #   sandbox at; {name} = worktree id (or `main`),
-                             #   {project} = project.
+                             #   {project} = project. Must end in .local for
+                             #   OrbStack; `orc sandbox dns install` adds the
+                             #   same name under .test.
   copy_files: [backend/.env.local]  # git-ignored files copied from the main
                              #   checkout into the worktree when missing there
   copy_home: [.config/stripe]       # Mac-home paths (CLI logins) copied into the
@@ -521,6 +524,21 @@ teardown inside. Nothing is published on the Mac's localhost.
   in *any* sandbox. Size the VM for the stacks you run at once, start subsets
   (`orc start api web`), and set `sandbox.memory` so a spike only hits the
   sandbox that caused it.
+- **`.test` hostnames (optional).** OrbStack only resolves custom container
+  names under `.local`. Run `orc sandbox dns install` once (it asks for your
+  password to write `/etc/resolver/test`) and every sandbox is also reachable
+  at the same name under `.test` — `feature-x.my-app.test` — which `orc start`
+  then prints instead. There is no background service: the Mac-side
+  `orc start` of a running sandbox answers `<x>.test` on `127.0.0.1:15353`
+  with the address of `<x>.local`, only for running sandboxes; with several
+  sandboxes up, one serves and the others take over within a second when it
+  exits. Any other `.test` name doesn't resolve. Useful when tools treat
+  `.test` (reserved for testing, RFC 2606) as a local development host, e.g.
+  browser automation that only enters test credentials there. Add `.test` to
+  Host-header allow-lists too. `orc sandbox dns status` checks the routing;
+  `orc sandbox dns uninstall` removes it. A sandbox whose `orc start` was
+  killed (headless) only keeps its `.test` name while another sandbox's
+  `orc start` is running; `.local` always works.
 - **IDE links** in the web dashboard still open files in your Mac's IDE (relayed
   by the Mac-side `orc start`; only files inside the IDE project).
 - **Not a security boundary.** The container is `--privileged` (its Docker
@@ -533,6 +551,9 @@ teardown inside. Nothing is published on the Mac's localhost.
 | `orc sandbox stop [name]` | Graceful stop (full teardown inside); default: this checkout's |
 | `orc sandbox rm [name] [--volumes]` | Force-remove (default: this checkout's); `--volumes` also drops its Docker image cache and home (logins) |
 | `orc sandbox prune` | Remove sandboxes and volumes whose worktree no longer exists |
+| `orc sandbox dns install [--port N] [--force]` | One-time: `.test` names for sandboxes (writes `/etc/resolver/test` via sudo; `--port` if 15353 is taken); `--force` replaces a resolver file another tool wrote (backed up; `uninstall` restores it) |
+| `orc sandbox dns status` | Check the resolver file and that macOS routes `.test` to orckit; list the running sandboxes' `.test` names |
+| `orc sandbox dns uninstall` | Remove orckit's resolver file (restoring one `--force` replaced) |
 
 If the `orc start` attached to a sandbox is killed outright, the sandbox keeps
 running headless (nothing is orphaned — it all lives in the container). The

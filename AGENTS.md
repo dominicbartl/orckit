@@ -227,9 +227,11 @@ Shape the config for it:
 - `dockerfile` (starting `ARG ORCKIT_BASE` / `FROM ${ORCKIT_BASE}`) for tools the processes call that aren't Node: Java for Firebase emulators, a pinned CLI version matching the team's Macs.
 - Package-manager store: the sandbox installs into its own `node_modules` (`isolate_node_modules`, default on), so mount the Mac's store to avoid re-downloading — pnpm: `mounts: [{ source: ~/Library/pnpm/store }]` + `env: { npm_config_store_dir: ~/Library/pnpm/store }`. Leave the project's pnpm/npm config alone; no cross-platform install settings are needed.
 
-The app usually needs two changes too, which you should make or point out: dev servers with a Host-header check allow the sandbox hostname (`allowedHosts: [".local"]`), and browser-side URLs to local services derive from `location.hostname` rather than `localhost`. Memory is shared across all sandboxes (OrbStack's VM); a stack with several Angular/webpack dev servers needs ~10 GB.
+The app usually needs two changes too, which you should make or point out: dev servers with a Host-header check allow the sandbox hostname (`allowedHosts: [".local", ".test"]`), and browser-side URLs to local services derive from `location.hostname` rather than `localhost`. Memory is shared across all sandboxes (OrbStack's VM); a stack with several Angular/webpack dev servers needs ~10 GB.
 
 When you run `orc start` yourself in a worktree that has `sandbox:` (or in the main checkout with `main_checkout: true`), it runs sandboxed; `--no-sandbox` runs natively. Manage leftovers with `orc sandbox list | stop | rm | prune`.
+
+`.test` names: OrbStack only resolves `.local`, so `domain` must stay under `.local` — don't change it to `.test` or `.localhost` (neither reaches the container). If the user wants sandboxes on `.test` (e.g. for tools that treat `.test` as a local development host), point them at `orc sandbox dns install` (one-time, needs their sudo password; you can't run it for them). `orc start` then prints `<name>.<project>.test` URLs; `orc sandbox dns status` diagnoses it.
 
 ## Environment and secrets
 

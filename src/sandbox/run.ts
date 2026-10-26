@@ -5,6 +5,9 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { sandboxConfigSchema, type OrckitConfig, type SandboxConfig } from '../config/schema.js';
 import type { IdeLink } from '../web/ide.js';
 import { isUnderRoot } from '../web/open.js';
+import { createDebug } from '../reporter/debug.js';
+import { forwarderAlive, installedDnsPort } from './dns-resolver.js';
+import { startDnsStandby, systemLookup, testAlias, type DnsStandbyHandle } from './dns.js';
 import { buildRunArgs, innerStartArgs, nodeModulesVolume } from './docker-args.js';
 import { findPackageDirs } from './packages.js';
 import { isAlive, processStartTime } from '../util/session-state.js';
@@ -12,6 +15,7 @@ import {
   ensureImage,
   ensureSandboxVolumes,
   isOrbStack,
+  listSandboxDomains,
   listSandboxes,
   packageRoot,
   removeSandbox,
@@ -138,6 +142,7 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
   }
 
   const relay = req.ide ? await startOpenRelay(req.ide) : null;
+  const { host, standby } = await sandboxDns(domain, req.warn);
   if (relay && req.ide) {
     env.ORCKIT_OPEN_RELAY = relay.url;
     env.ORCKIT_SANDBOX_IDE = JSON.stringify(req.ide);
@@ -147,6 +152,7 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
   const args = buildRunArgs({
     name,
     domain,
+    host,
     image,
     project: req.config.project,
     checkout,
@@ -167,12 +173,46 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<number> {
     startArgs: innerStartArgs(req.argsAfterStart, req.configPath),
   });
 
-  req.log(`sandbox ${name} → ${domain} (also ${name}.orb.local)`);
+  const aliases = [...(host === domain ? [] : [domain]), `${name}.orb.local`];
+  req.log(`sandbox ${name} → ${host} (also ${aliases.join(', ')})`);
   try {
     return await runDocker(args);
   } finally {
     await relay?.dispose();
+    await standby?.dispose();
   }
+}
+
+const debug = createDebug('SandboxDns');
+
+/**
+ * `.test` names, when `orc sandbox dns install` set them up: join the `.test`
+ * forwarder for as long as this sandbox runs (serving, or standing by to take
+ * over from another sandbox's `orc start`), and show the sandbox under its
+ * `.test` alias. Otherwise, or when something else holds the port, the
+ * OrbStack `.local` domain.
+ */
+async function sandboxDns(
+  domain: string,
+  warn: (msg: string) => void,
+): Promise<{ host: string; standby: DnsStandbyHandle | null }> {
+  const alias = testAlias(domain);
+  const port = installedDnsPort();
+  if (!alias || port === null) return { host: domain, standby: null };
+  const standby = await startDnsStandby({
+    port,
+    sandboxDomains: listSandboxDomains,
+    lookup: systemLookup,
+    // Mid-session the terminal belongs to the sandbox: debug level only
+    // (ORCKIT_DEBUG=SandboxDns), never printed by default.
+    onError: (err) => debug.debug(err.message),
+  });
+  if (standby.serving() || (await forwarderAlive(port))) return { host: alias, standby };
+  warn(
+    `.test names are set up but 127.0.0.1:${port} is held by something other than orckit — ` +
+      `showing ${domain} (see \`orc sandbox dns status\`)`,
+  );
+  return { host: domain, standby };
 }
 
 /**

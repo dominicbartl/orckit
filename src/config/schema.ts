@@ -322,7 +322,8 @@ export const sandboxConfigSchema = z.object({
   /**
    * Hostname the sandbox is reachable at from the Mac. `{name}` is the worktree
    * name, `{project}` the config's `project`. The container is additionally
-   * reachable at `<container>.orb.local`.
+   * reachable at `<container>.orb.local`. OrbStack only serves `.local` names;
+   * `orc sandbox dns install` makes `<x>.local` reachable as `<x>.test` too.
    */
   domain: z.string().min(1).default('{name}.{project}.local'),
   /**

@@ -9,6 +9,11 @@ export interface SandboxRunSpec {
   name: string;
   /** Hostname the Mac reaches the sandbox at (OrbStack `dev.orbstack.domains`). */
   domain: string;
+  /**
+   * Hostname the inner orc prints in its URLs: `domain`'s `.test` alias when
+   * `orc sandbox dns` is set up (see `dns.ts`), otherwise `domain` itself.
+   */
+  host: string;
   image: string;
   project: string;
   checkout: Checkout;
@@ -169,7 +174,7 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
 
   const env: Record<string, string> = {
     ORCKIT_SANDBOX: spec.name,
-    ORCKIT_SANDBOX_HOST: spec.domain,
+    ORCKIT_SANDBOX_HOST: spec.host,
     COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
     // Changes whenever copy_home does, so the entrypoint re-seeds an existing
     // home instead of silently skipping paths added later.

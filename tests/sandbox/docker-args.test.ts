@@ -11,6 +11,7 @@ import {
 const spec = (over: Partial<SandboxRunSpec> = {}): SandboxRunSpec => ({
   name: 'orckit-app-wt1',
   domain: 'wt1.app.local',
+  host: 'wt1.app.local',
   image: 'orckit-sandbox-app:abc',
   project: 'app',
   checkout: {
@@ -184,6 +185,12 @@ describe('buildRunArgs', () => {
       ]),
     );
     expect(values(buildRunArgs(spec()), '-e')).not.toContain('ORCKIT_RESEED=1');
+  });
+
+  it('keeps the OrbStack label on .local but prints the .test host', () => {
+    const args = buildRunArgs(spec({ host: 'wt1.app.test' }));
+    expect(values(args, '--label')).toContain('dev.orbstack.domains=wt1.app.local');
+    expect(values(args, '-e')).toContain('ORCKIT_SANDBOX_HOST=wt1.app.test');
   });
 
   it('keys home seeding on the copy_home list, so additions re-seed', () => {

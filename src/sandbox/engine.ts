@@ -142,6 +142,23 @@ export async function listSandboxes(): Promise<SandboxInfo[]> {
 }
 
 /**
+ * Hostnames (OrbStack `dev.orbstack.domains`) of the running sandboxes. Called
+ * by the `.test` forwarder on DNS misses, so it is time-boxed: a stopped or
+ * wedged engine must fail the query, not stall every lookup behind it.
+ */
+export async function listSandboxDomains(timeoutMs = 3000): Promise<string[]> {
+  const { stdout } = await execa(
+    'docker',
+    ['ps', '--filter', `label=${SANDBOX_LABEL}`, '--format', '{{.Label "dev.orbstack.domains"}}'],
+    { timeout: timeoutMs },
+  );
+  return stdout
+    .split(/[\n,]/)
+    .map((domain) => domain.trim())
+    .filter(Boolean);
+}
+
+/**
  * Stop a sandbox gracefully: `docker stop` SIGTERMs the inner `orc start`,
  * which runs its full teardown. The timeout covers slow stop graces (Firebase
  * emulators need ~30s); Docker SIGKILLs after it, which still takes everything
