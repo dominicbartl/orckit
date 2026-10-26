@@ -35,4 +35,14 @@ export default [
       'no-control-regex': 'off',
     },
   },
+  {
+    files: ['**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.es2021 },
+    },
+    plugins: { prettier: prettierPlugin },
+    rules: { ...prettier.rules, 'prettier/prettier': 'error' },
+  },
 ];

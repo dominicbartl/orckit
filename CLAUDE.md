@@ -66,6 +66,11 @@ src/
                       # the action surface in that mode.
     debug.ts          # Minimal namespaced logger (ORCKIT_DEBUG=ns1,ns2)
 
+  logs/               # parsed log viewer (docs/plans/firebase-log-viewer.md)
+    inspect-parse.ts  # Lenient util.inspect / JSON → serializable LogValue tree.
+                      # parseLogText splits `console.log('msg', obj)` into
+                      # message + trailing container; fails closed to null.
+
   mcp/
     server.ts         # attachMcpServer — Streamable HTTP MCP listener that
                       # exposes the running Orckit instance to MCP clients
@@ -123,7 +128,8 @@ packages/
                       # copies dist/ into `dist/web/static/` for the npm tarball.
 
 tests/
-  config/  graph/  health/  process/  orchestrator/  util/    # unit tests
+  config/  graph/  health/  logs/  process/  orchestrator/  util/    # unit tests
+  fixtures/firebase-logging/  # recorded logging-emulator bundles + recorder
   integration/                                                # end-to-end
 ```
 
