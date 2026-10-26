@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/dominicbartl/orckit/compare/v0.5.0...v0.6.0) (2026-10-26)
+
+
+### Features
+
+* reach sandboxes at `.test` hostnames (`orc sandbox dns install`) ([da2cc28](https://github.com/dominicbartl/orckit/commit/da2cc281eed1b87933bffeca8624b952a499fd3c))
+
 ## [0.5.0](https://github.com/dominicbartl/orckit/compare/v0.4.0...v0.5.0) (2026-10-26)
 
 
