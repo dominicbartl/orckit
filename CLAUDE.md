@@ -270,11 +270,16 @@ CLI hand-off, not in the orchestrator.
 
 Invariants that hold it together:
 
-- **Same paths inside and out.** Worktree, `.git` common dir and orckit are
-  mounted at their Mac paths, so logs, IDE links and git's absolute worktree
-  pointers stay valid with no translation layer. orckit is read-only unless
-  the project's `node_modules/@orckit/cli` links to it (local `link:` dev
-  setup), whose install inside the sandbox chmods its bin.
+- **Same paths inside and out.** Worktree, `.git` common dir and a local
+  orckit checkout are mounted at their Mac paths, so logs, IDE links and git's
+  absolute worktree pointers stay valid with no translation layer. A local
+  orckit is read-only unless the project's `node_modules/@orckit/cli` links to
+  it (`link:` dev setup), whose install inside the sandbox chmods its bin.
+  The one exception is an orckit **installed** from the registry: the
+  outermost `node_modules` holding it is mounted read-only at
+  `/orckit/node_modules` — its Mac path may sit under a checkout whose
+  `node_modules` the sandbox replaces, and its dependencies live outside its
+  package dir (orckit's runtime deps are pure JS, so the Mac copies run fine).
 - **`docker run`, never `docker exec`.** Only `docker run` proxies signals and
   the TTY; that is what makes Ctrl-C / SIGTERM / SIGHUP reach the inner orc's
   normal teardown. `--rm` + one container per sandbox makes `docker rm -f` a

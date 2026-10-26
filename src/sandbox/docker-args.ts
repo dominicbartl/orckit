@@ -12,12 +12,16 @@ export interface SandboxRunSpec {
   image: string;
   project: string;
   checkout: Checkout;
-  /** Root of the orckit package to run inside — mounted at the same path. */
+  /**
+   * Root of the orckit package to run inside (real path). A local checkout is
+   * mounted at the same path; an installed one (under `node_modules`) with its
+   * `node_modules` at {@link ORCKIT_NODE_MODULES}.
+   */
   packageRoot: string;
   /**
-   * Mount `packageRoot` writable. Only when the project itself links to it
-   * (a local `link:` dev setup): its package manager then installs into it and
-   * chmods its bin, which fails on a read-only mount.
+   * Mount a local-checkout `packageRoot` writable. Only when the project itself
+   * links to it (a `link:` dev setup): its package manager then installs into
+   * it and chmods its bin, which fails on a read-only mount.
    */
   packageWritable: boolean;
   /** Absolute path of the config file (same path inside the sandbox). */
@@ -72,6 +76,23 @@ export function nodeModulesVolume(name: string, packageDir: string): string {
 /** Mount point of the Mac-home seed copies inside the sandbox. */
 export const SEED_DIR = '/orckit-seed';
 
+/** Mount point of an installed orckit's `node_modules` inside the sandbox. */
+export const ORCKIT_NODE_MODULES = '/orckit/node_modules';
+
+/**
+ * Split an orckit installed from a registry into the outermost `node_modules`
+ * above it and its path within. That directory holds orckit's dependencies too
+ * (pnpm's `.pnpm` store links them with relative symlinks; npm and yarn hoist
+ * them beside it), so mounting it whole lets orckit resolve them. null for a
+ * local orckit checkout, which carries its own `node_modules`.
+ */
+export function installedNodeModules(packageRoot: string): { root: string; rel: string } | null {
+  const parts = packageRoot.split('/');
+  const i = parts.indexOf('node_modules');
+  if (i < 0) return null;
+  return { root: parts.slice(0, i + 1).join('/'), rel: parts.slice(i + 1).join('/') };
+}
+
 /**
  * The `docker run` argv for a sandbox. orckit runs as the container's main
  * process (behind `--init`) so `docker run`'s signal proxy and TTY carry
@@ -120,7 +141,13 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
   };
   bind(checkout.root, checkout.root, false);
   bind(checkout.commonDir, checkout.commonDir, false);
-  bind(spec.packageRoot, spec.packageRoot, !spec.packageWritable);
+  // An installed orckit goes to a fixed path instead: at its Mac path it could
+  // sit under the checkout, hidden by the sandbox's own node_modules volume,
+  // and its dependencies live outside its package dir.
+  const installed = installedNodeModules(spec.packageRoot);
+  const orckitRoot = installed ? join(ORCKIT_NODE_MODULES, installed.rel) : spec.packageRoot;
+  if (installed) args.push('-v', `${installed.root}:${ORCKIT_NODE_MODULES}:ro`);
+  else bind(spec.packageRoot, spec.packageRoot, !spec.packageWritable);
 
   // Per-sandbox state that must survive restarts: the inner Docker image cache
   // and the sandbox's own home (seeded logins, corepack/pnpm caches).
@@ -162,7 +189,7 @@ export function buildRunArgs(spec: SandboxRunSpec): string[] {
     spec.cwd,
     spec.image,
     'node',
-    join(spec.packageRoot, 'dist', 'cli.js'),
+    join(orckitRoot, 'dist', 'cli.js'),
     'start',
     ...spec.startArgs,
   );

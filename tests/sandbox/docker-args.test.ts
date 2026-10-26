@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRunArgs,
+  installedNodeModules,
   nodeModulesVolume,
+  ORCKIT_NODE_MODULES,
   innerStartArgs,
   type SandboxRunSpec,
 } from '../../src/sandbox/docker-args.js';
@@ -115,6 +117,37 @@ describe('buildRunArgs', () => {
     expect(values(buildRunArgs(spec({ packageWritable: true })), '-v')).toContain(
       '/opt/orckit:/opt/orckit',
     );
+  });
+
+  it('mounts an installed orckit with its whole node_modules at a fixed path', () => {
+    // pnpm, installed in the worktree itself: its Mac path is hidden by the
+    // sandbox's node_modules volume, and `commander` sits outside the package dir.
+    const pkg = '.pnpm/@orckit+cli@0.4.0/node_modules/@orckit/cli';
+    const args = buildRunArgs(
+      spec({
+        packageRoot: `/repo/.claude/worktrees/wt1/node_modules/${pkg}`,
+        packageWritable: true,
+        packageDirs: [''],
+      }),
+    );
+    const v = values(args, '-v');
+    expect(v).toContain(`/repo/.claude/worktrees/wt1/node_modules:${ORCKIT_NODE_MODULES}:ro`);
+    expect(v.filter((m) => m.includes('@orckit+cli'))).toEqual([]);
+    expect(args).toContain(`${ORCKIT_NODE_MODULES}/${pkg}/dist/cli.js`);
+  });
+
+  it('splits an installed orckit at its outermost node_modules', () => {
+    expect(installedNodeModules('/repo/node_modules/@orckit/cli')).toEqual({
+      root: '/repo/node_modules',
+      rel: '@orckit/cli',
+    });
+    expect(
+      installedNodeModules('/repo/node_modules/.pnpm/@orckit+cli@0.4.0/node_modules/@orckit/cli'),
+    ).toEqual({
+      root: '/repo/node_modules',
+      rel: '.pnpm/@orckit+cli@0.4.0/node_modules/@orckit/cli',
+    });
+    expect(installedNodeModules('/Users/me/orckit')).toBeNull();
   });
 
   it('skips mounts already covered by a parent mount', () => {
