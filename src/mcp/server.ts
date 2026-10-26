@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Orckit } from '../orchestrator/orchestrator.js';
 import { trackBuilds } from '../process/build-tracker.js';
+import { ORCKIT_VERSION } from '../util/version.js';
 import { registerTools } from './tools.js';
 
 export interface McpServerOptions {
@@ -61,7 +62,7 @@ export async function attachMcpServer(
   // is also re-created per request (cheap; just tool registration).
   const handleMcp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const mcp = new McpServer(
-      { name: 'orckit', version: '0.2.0' },
+      { name: 'orckit', version: ORCKIT_VERSION },
       { capabilities: { tools: {} } },
     );
     registerTools(mcp, orckit, lastErrors, tracker);

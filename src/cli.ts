@@ -15,6 +15,7 @@ import {
   type BlockedPort,
 } from './util/blocked-ports.js';
 import { freePort } from './util/port.js';
+import { ORCKIT_VERSION } from './util/version.js';
 import { attachSessionTracker } from './reporter/session-tracker.js';
 import {
   clearSession,
@@ -48,7 +49,7 @@ import type { IdeLink } from './web/ide.js';
 const program = new Command()
   .name('orc')
   .description('Lean CLI process orchestrator')
-  .version('0.2.0');
+  .version(ORCKIT_VERSION);
 
 program
   .command('validate')
