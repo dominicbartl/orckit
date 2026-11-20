@@ -76,6 +76,10 @@ src/
     inspect-parse.ts  # Lenient util.inspect / JSON → serializable LogValue tree.
                       # parseLogText splits `console.log('msg', obj)` into
                       # message + trailing container; fails closed to null.
+    firebase.ts       # createFirebaseLogAssembler — logging-emulator bundles →
+                      # execution / log / system entries. Re-merges the
+                      # one-bundle-per-stdout-line split, emits in start order
+                      # (holds back behind open entries); flush() on quiet.
 
   mcp/
     server.ts         # attachMcpServer — Streamable HTTP MCP listener that

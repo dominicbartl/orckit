@@ -232,11 +232,35 @@ a **devDependency** for the fake logging-emulator server in tests.
    parse every multi-line object entry in the fixtures, check that Nest lines
    and paths with `{id}` stay text, and fuzz truncated fixture text for
    no-throw. The whole 2,881-entry replay parses in about 12 ms.
-2. `firebase.ts` reducer plus tests on the recorded fixtures: merging,
-   interleaving fallback, handler extraction, execution rows.
+2. ~~`firebase.ts` reducer plus tests.~~ **Done.**
+   `createFirebaseLogAssembler()` returns `{ push(bundle), flush(), inFlight() }`
+   and emits `FirebaseLogEntry` values, a union of three kinds:
+   - `execution`: function and duration
+   - `log`: level, message, `value`, `stack`, `handler`, Nest `context`/`pid`,
+     `lineCount`
+   - `system`
+
+   Entries come out **in start order with consecutive ids**. A finished entry
+   waits behind one still collecting lines, for at most the 50 ms gap. An entry
+   closes on any of these:
+   - a column-0 `}`/`]` that balances it
+   - the next unindented line of its function
+   - a system line of its function, but only while no brackets are open
+   - the gap
+   - `flush()`
+
+   Line text comes from `message`, where Firebase has already stripped ANSI,
+   and not from `data.user`. A `  2` line of an array dump JSON-parses to the
+   number 2. The tests prove every bundle of every fixture lands in exactly one
+   entry (sum of `lineCount`, executions, system lines). They also cover the
+   8-probe burst end to end, the Stripe dump (one 79-line error entry, 3-frame
+   stack), start-up system lines and every Nest level.
+   **Contract for step 3:** the tracker must call `flush()` once the socket has
+   been quiet for `MERGE_GAP_MS`. Otherwise the last log line waits for the next
+   bundle.
 3. Schema, `firebase-source.ts` and `tracker.ts`, plus tests against a fake hub
-   and WebSocket server: discovery, reconnect → reset, close on process stop,
-   ring-buffer cap.
+   and WebSocket server: discovery, reconnect → reset (a fresh assembler per
+   connection), quiet-period `flush()`, close on process stop, ring-buffer cap.
 4. Web server wiring (snapshot field, `/api/logs/:name`, SSE events) plus
    tests.
 5. Frontend components, sink fixtures and the Parsed tab.
