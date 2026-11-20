@@ -176,6 +176,24 @@ Don't reach for this by default. Orckit's normal teardown snapshots the whole de
 
 **Do declare `ports` even without `kill_orphan_ports`.** They feed the pre-boot blocked-port check, which is what turns "a leftover process from yesterday silently holds this port" into a prompt at startup. Any process that binds a well-known port is worth listing.
 
+## `url` — where a process is reachable in a browser
+
+Most configs need nothing: orckit detects dev-server URLs from output (`Local: http://…` from Angular/Vite/Next, webpack-dev-server's `Loopback:`, Firebase's `View Emulator UI at …`) and otherwise shows the origin of an `http` ready check. The URL becomes a clickable column in the terminal dashboard and a link in the web dashboard header. Only set it when that guess is missing or wrong:
+
+```yaml
+templates:
+  command: node template-server.js
+  url: http://localhost:3333            # static: the server never prints its URL
+# or
+  url: { pattern: 'templates on (http://\S+)' }   # capture group 1 from an output line
+# or
+  url: false                            # backend with an http ready check that isn't worth opening
+```
+
+- Don't hard-code `url:` on Angular/Vite/Next/Firebase processes — detection already finds it and follows a port change.
+- `pattern` is matched per line with ANSI codes stripped; with no capture group the whole match is used. Invalid regexes fail validation.
+- Inside a sandbox, loopback URLs are rewritten to the sandbox hostname automatically — write `localhost`, not the sandbox domain.
+
 ## `output` filters
 
 ```yaml
@@ -292,6 +310,7 @@ Full event list and CLI flag reference: [README.md](README.md).
 If the user is already running `orc start` in another terminal, prefer querying its MCP server over spawning a new `orc`. `orc start` exposes read-only tools by default (`get_status`, `get_errors`, `get_logs`, `get_build_status`, `wait_for_build`) on `http://127.0.0.1:7676/mcp`. The user only needs to register it once with `claude mcp add --transport http orckit http://127.0.0.1:7676/mcp`.
 
 - "Is the build running?" / "what's failing?" → call `get_status` (and `get_errors` if anything is in a failed state).
+- "Where is the frontend served?" / "open the app" → `get_status` includes each process's `url` (dev-server URL detected from its output, or configured).
 - "Show me the recent api output" → call `get_logs` with `{ name: 'api', lines: 100 }`.
 - **Before running your own build/typecheck to verify a change** → call `get_build_status` (or `wait_for_build` with `{ name: 'web' }`) and use orckit's result. orckit already runs the project's watch build; spawning a duplicate `webpack`/`ng build`/`tsc` is wasteful and can race the watcher. Build phase is only tracked for `webpack`/`angular` process types — for others, fall back to running the check yourself.
 - If the tools aren't connectable, the user hasn't started orckit — tell them to run `orc start` rather than silently spawning your own.

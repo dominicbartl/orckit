@@ -6,6 +6,8 @@ project: angular
 # complete" lines into build:start / build:complete events and the dashboard
 # annotates the row ("building" → "built"). The http ready check waits for the
 # dev server to actually answer on :4200 before marking the process ready.
+# orckit detects `ng serve`'s `Local: http://localhost:4200/` line, so the
+# dashboard shows a clickable URL for `web` with no `url:` needed.
 #
 # First run installs the Angular toolchain via the pre_start hook (slow, cold);
 # later runs reuse node_modules and boot in a couple of seconds.

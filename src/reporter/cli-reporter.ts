@@ -50,6 +50,8 @@ export interface CliReporterOptions {
    * tails (the recent-output dump) and preflight results still print.
    */
   quietProcessEvents?: boolean;
+  /** Maps a process URL to the one the user's browser can reach (sandbox rewrite). */
+  publicUrl?: (url: string) => string;
 }
 
 export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {}): () => void {
@@ -57,6 +59,11 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   const hint = opts.printHint ?? ((msg: string) => out('\n' + msg));
   const tailLines = opts.failureTailLines ?? 10;
   const quiet = opts.quietProcessEvents ?? false;
+  const publicUrl = opts.publicUrl ?? ((url: string) => url);
+  const urlSuffix = (name: string): string => {
+    const url = orckit.inspect(name).url;
+    return url ? `  ${chalk.cyan(publicUrl(url))}` : '';
+  };
 
   const onStarting = (name: string) => {
     if (quiet) return;
@@ -64,7 +71,17 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   };
   const onReady = (name: string, ms: number) => {
     if (quiet) return;
-    out(`  ${chalk.green(STATE_ICON.ready)} ${name} ready ${chalk.dim(`(${formatDuration(ms)})`)}`);
+    out(
+      `  ${chalk.green(STATE_ICON.ready)} ${name} ready ${chalk.dim(`(${formatDuration(ms)})`)}${urlSuffix(name)}`,
+    );
+  };
+  // A URL found before ready rides on the ready line; one announced later (or
+  // after a restart on a new port) gets its own line.
+  const onUrl = (name: string, url: string) => {
+    if (quiet) return;
+    const state = orckit.state(name);
+    if (state !== 'ready' && state !== 'running') return;
+    out(`  ${chalk.cyan('↗')} ${name} ${chalk.cyan(publicUrl(url))}`);
   };
   const onFinished = (name: string, ms: number) => {
     if (quiet) return;
@@ -193,6 +210,7 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
   orckit.on('preflight:result', onPreflightResult);
   orckit.on('process:starting', onStarting);
   orckit.on('process:ready', onReady);
+  orckit.on('process:url', onUrl);
   orckit.on('process:finished', onFinished);
   orckit.on('process:stopping', onStopping);
   orckit.on('process:killed', onKilled);
@@ -212,6 +230,7 @@ export function attachCliReporter(orckit: Orckit, opts: CliReporterOptions = {})
     orckit.off('preflight:result', onPreflightResult);
     orckit.off('process:starting', onStarting);
     orckit.off('process:ready', onReady);
+    orckit.off('process:url', onUrl);
     orckit.off('process:finished', onFinished);
     orckit.off('process:stopping', onStopping);
     orckit.off('process:killed', onKilled);

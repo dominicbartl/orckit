@@ -232,6 +232,16 @@ function bindHandlers(source: EventSource, setStore: SetStoreFunction<StoreShape
     );
   });
 
+  source.addEventListener('url', (e) => {
+    const { name, url } = parse<{ name: string; url: string }>(e);
+    setStore(
+      produce((s) => {
+        const p = s.processes[name];
+        if (p) p.url = url;
+      }),
+    );
+  });
+
   source.addEventListener('line', (e) => {
     const line = parse<{
       name: string;

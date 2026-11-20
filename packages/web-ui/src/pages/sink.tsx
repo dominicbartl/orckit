@@ -10,6 +10,7 @@ import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { LogView } from '../components/LogView';
 import { ProcessRow } from '../components/ProcessRow';
+import { UrlLink } from '../components/UrlLink';
 import { Sparkline } from '../components/Sparkline';
 import { BrandMark, BrandLogo } from '../components/Brand';
 import {
@@ -124,6 +125,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 0,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: null,
   },
   {
     name: 'redis',
@@ -137,6 +139,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 2,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: null,
     lastError: 'exited (code 1) — port 6379 in use',
   },
   {
@@ -151,6 +154,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 0,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: null,
   },
   {
     name: 'api',
@@ -164,6 +168,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 0,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: 'http://localhost:3000',
   },
   {
     name: 'web',
@@ -177,6 +182,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 0,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: 'http://localhost:4200',
     // Dev server stays up across a failed recompile — the build badge flags the
     // breakage and the captured diagnostics surface in the Errors tab.
     build: { phase: 'done', success: false, errors: 2, warnings: 0 },
@@ -197,6 +203,7 @@ const SAMPLE_PROCESSES: ProcessSnapshot[] = [
     retries: 0,
     optional: false,
     cwd: '/Users/dev/acme-web',
+    url: null,
   },
 ];
 
@@ -390,6 +397,34 @@ export default function Sink() {
               <p class="text-xs text-status-failed font-mono">exited (code 1) — port 6379 in use</p>
             </Card>
           </div>
+        </Section>
+
+        <Section
+          title="Process URL"
+          subtitle="A process's root URL (config url:, detected from dev-server output, or an http ready check's origin). Shown in the detail header and Details tab; dimmed while the process isn't serving."
+        >
+          <Card>
+            <div class="flex flex-col gap-3">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-lg font-medium text-fg-primary">web</span>
+                <StateBadge state="running" />
+                <UrlLink url="http://localhost:4200" class="ml-1" />
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-lg font-medium text-fg-primary">emulators</span>
+                <StateBadge state="starting" />
+                <UrlLink url="http://127.0.0.1:4000" live={false} class="ml-1" />
+              </div>
+              <div class="flex items-center gap-2 max-w-xs">
+                <span class="font-mono text-lg font-medium text-fg-primary">templates</span>
+                <StateBadge state="ready" />
+                <UrlLink
+                  url="https://templates.feature-x.example.test/preview/very/long/path"
+                  class="ml-1 min-w-0"
+                />
+              </div>
+            </div>
+          </Card>
         </Section>
 
         <Section title="Process row" subtitle="The atomic unit of the dashboard's left panel.">

@@ -49,6 +49,12 @@ export interface ProcessSnapshot {
    * its output are resolved against this before building IDE deep links.
    */
   cwd: string;
+  /**
+   * The process's root URL — where it's reachable in a browser (a dev server,
+   * the Firebase Emulator UI). Static from config or detected from output;
+   * updated live via the `url` SSE event. Null when it has none.
+   */
+  url: string | null;
   lastError?: string;
   build?: BuildStatus;
   /**

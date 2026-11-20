@@ -36,6 +36,11 @@ src/
                       # diagnostics. Shared by the web AND mcp servers so they
                       # never drift on build-outcome accumulation.
     output.ts         # OutputBuffer with suppress/include/highlight filters
+    url.ts            # Process root URL: initialUrl (static / http ready-check
+                      # origin), urlMatcher (`url.pattern` or detectUrl's
+                      # dev-server patterns), rewriteLoopbackHost (sandbox).
+                      # The orchestrator keeps the value on the handle →
+                      # inspect().url + `process:url`.
 
   orchestrator/
     lifecycle.ts      # Pure state machine: transition(state, event) → state
@@ -54,6 +59,7 @@ src/
                       # duration of a shutdown (replaces the live reporter):
                       # per-process stopping/stopped/timeout status + piped
                       # process & hook output, indented and name-tagged.
+    hyperlink.ts      # OSC 8 terminal hyperlink (dashboard URL column + header).
     graph-view.ts     # Pure renderGraph(graph, opts) — wave-grouped tree used
                       # by `orc validate` AND the dashboard.
     brand.ts          # ANSI brand mark (mirrors the SVG bars in web-ui),

@@ -11,6 +11,7 @@ import { LogView } from '../components/LogView';
 import { LinkedText } from '../components/LinkedText';
 import { ProcessGroup, groupByCategory } from '../components/ProcessGroup';
 import { BrandMark } from '../components/Brand';
+import { UrlLink } from '../components/UrlLink';
 import { IconPlay, IconRestart, IconStop, IconLogs, IconAlert, IconCopy } from '../lib/icons';
 import { useOrckit } from '../lib/stream';
 import { useToasts } from '../lib/toasts';
@@ -225,6 +226,9 @@ function DetailHeader(props: { process: Accessor<ProcessSnapshot> }) {
             <Show when={p().retries > 0}>
               <Badge tone="warning">retry ×{p().retries}</Badge>
             </Show>
+            <Show when={p().url}>
+              {(url) => <UrlLink url={url()} live={isServing(p().state)} class="ml-1" />}
+            </Show>
           </div>
           <div class="mt-1 text-[12px] text-fg-tertiary font-mono truncate" title={p().command}>
             {p().command}
@@ -425,6 +429,11 @@ function DetailsPanel(props: { process: Accessor<ProcessSnapshot> }) {
         <Field label="Category" value={p().category || 'default'} mono />
         <Field label="Type" value={p().type} mono />
         <Field label="Command" value={p().command} mono />
+        <Field
+          label="URL"
+          value={p().url ? <UrlLink url={p().url!} live={isServing(p().state)} /> : '—'}
+          mono
+        />
         <Field label="PID" value={p().pid != null ? String(p().pid) : '—'} mono />
         <Field
           label="Started"
@@ -527,6 +536,11 @@ function ToastStack() {
       </For>
     </div>
   );
+}
+
+/** Whether the process is up and answering — its URL is worth clicking. */
+function isServing(state: ProcessSnapshot['state']): boolean {
+  return state === 'ready' || state === 'running';
 }
 
 function formatDuration(ms: number): string {

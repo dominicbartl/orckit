@@ -29,6 +29,8 @@ export interface WebUiServerOptions {
    * there instead of launching anything itself.
    */
   openRelay?: string;
+  /** Maps a process URL to the one the browser can reach (sandbox rewrite). */
+  publicUrl?: (url: string) => string;
 }
 
 export interface WebUiServerHandle {
@@ -61,6 +63,7 @@ export async function attachWebUi(
   const host = opts.host ?? '127.0.0.1';
   const ide = opts.ide ?? null;
   const openRelay = opts.openRelay;
+  const publicUrl = opts.publicUrl ?? ((url: string) => url);
   const staticDir = resolveStaticDir();
 
   // Track last error per process so the initial snapshot can surface it
@@ -102,7 +105,11 @@ export async function attachWebUi(
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && path === '/api/state') {
-      sendJson(res, 200, buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide }));
+      sendJson(
+        res,
+        200,
+        buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl }),
+      );
       return;
     }
 
@@ -238,7 +245,7 @@ export async function attachWebUi(
     res.flushHeaders();
 
     activeEventStreams.add(res);
-    const detach = streamOrckitEvents(orckit, res);
+    const detach = streamOrckitEvents(orckit, res, publicUrl);
 
     const cleanup = () => {
       detach();
@@ -251,7 +258,7 @@ export async function attachWebUi(
     // separate /api/state fetch when it reconnects.
     res.write(`event: snapshot\n`);
     res.write(
-      `data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide }))}\n\n`,
+      `data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl }))}\n\n`,
     );
   }
 

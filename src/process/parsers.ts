@@ -44,7 +44,10 @@ export function reduceBuild(event: BuildEvent): BuildStatus {
   }
 }
 
-const ANSI_RE = /\x1B\[[0-9;]*[a-zA-Z]/g;
+// CSI sequences (colors, cursor moves) and OSC sequences terminated by BEL or
+// ST — the latter covers OSC 8 hyperlinks, which the dashboard emits itself and
+// must not count toward a line's visible width.
+const ANSI_RE = /\x1B\[[0-9;?]*[a-zA-Z]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g;
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, '');
 }

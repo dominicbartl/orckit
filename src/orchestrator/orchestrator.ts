@@ -13,6 +13,7 @@ import { HealthTimeoutError, waitForReady } from '../health/wait.js';
 import { Runner } from '../process/runner.js';
 import { OutputBuffer, type OutputLine } from '../process/output.js';
 import { getParser, type BuildEvent, type LineParser } from '../process/parsers.js';
+import { initialUrl, urlMatcher, type UrlMatcher } from '../process/url.js';
 import { isPortFree, killPortHolders } from '../util/port.js';
 import {
   isActive,
@@ -99,6 +100,12 @@ export type OrckitEvents = {
   'process:restarting': [name: string, attempt: number];
   'process:line': [name: string, line: OutputLine];
   'process:build': [name: string, event: BuildEvent];
+  /**
+   * The process's root URL changed — detected in its output (or captured by
+   * `url.pattern`). Not emitted for a static `url:`; read the initial value
+   * from `inspect(name).url`.
+   */
+  'process:url': [name: string, url: string];
   'hook:start': [name: string, hook: HookKind];
   'hook:line': [name: string, hook: HookKind, text: string, stream: 'stdout' | 'stderr'];
   'hook:complete': [name: string, hook: HookKind];
@@ -120,6 +127,12 @@ interface Handle {
   probe: HealthProbe | null;
   buffer: OutputBuffer;
   parser: LineParser | null;
+  /** Current root URL (see process/url.ts); survives restarts until replaced. */
+  url: string | null;
+  /** Finds the URL in output; null when it's static or disabled. */
+  urlMatcher: UrlMatcher | null;
+  /** Set once this spawn's output has yielded a URL — later matches are ignored. */
+  urlFound: boolean;
   retries: number;
   /**
    * Abort controller for the CURRENT startup attempt, created before the
@@ -367,6 +380,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     pid: number | null;
     startedAt: number | null;
     retries: number;
+    /** Root URL — static, detected from output, or null. Changes emit `process:url`. */
+    url: string | null;
   } {
     const h = this.requireHandle(name);
     return {
@@ -374,6 +389,7 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       pid: h.runner?.pid ?? null,
       startedAt: h.startedAt,
       retries: h.retries,
+      url: h.url,
     };
   }
 
@@ -543,6 +559,8 @@ export class Orckit extends EventEmitter<OrckitEvents> {
     handle.runner = runner;
     handle.lastRunner = runner;
     handle.startedAt = Date.now();
+    // A restart may come up on another port; let this spawn announce its own.
+    handle.urlFound = false;
 
     runner.on('line', (text, stream) => this.handleLine(name, text, stream));
     runner.on('kill', (signal) => this.emit('process:killed', name, signal));
@@ -737,6 +755,18 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       const event = handle.parser(text);
       if (event) this.emit('process:build', name, event);
     }
+    // First URL per spawn wins: dev servers print theirs once at startup, and
+    // locking it stops a later log line from flipping the link around.
+    if (handle.urlMatcher && !handle.urlFound) {
+      const url = handle.urlMatcher(text);
+      if (url) {
+        handle.urlFound = true;
+        if (url !== handle.url) {
+          handle.url = url;
+          this.emit('process:url', name, url);
+        }
+      }
+    }
   }
 
   private handleExit(name: string, code: number | null, signal: NodeJS.Signals | null): void {
@@ -838,6 +868,9 @@ export class Orckit extends EventEmitter<OrckitEvents> {
       probe: null,
       buffer: new OutputBuffer(config.buffer_size, config.output),
       parser: getParser(config.type),
+      url: initialUrl(config),
+      urlMatcher: urlMatcher(config),
+      urlFound: false,
       retries: 0,
       shutdown: null,
       startup: null,

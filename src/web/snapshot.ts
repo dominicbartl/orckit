@@ -23,6 +23,8 @@ export interface ProcessSnapshot {
    * process's output against it before building IDE deep links.
    */
   cwd: string;
+  /** Where the process is reachable in a browser (already rewritten for a sandbox), or null. */
+  url: string | null;
   lastError?: string;
   /** Latest build status, for processes whose `type` has a build parser. */
   build?: BuildStatus;
@@ -46,6 +48,8 @@ export interface SnapshotContext {
   buildErrors: ReadonlyMap<string, string[]>;
   /** Resolved IDE deep-link descriptor, or null when not a JetBrains project / disabled. */
   ide: IdeLink | null;
+  /** Maps a process URL to the one the browser can reach. Identity when omitted. */
+  publicUrl?: (url: string) => string;
 }
 
 /**
@@ -70,6 +74,7 @@ export function buildSnapshot(orckit: Orckit, ctx: SnapshotContext): OrckitSnaps
       // Resolve the same way the Runner spawns: `config.cwd ?? process.cwd()`,
       // with a relative `config.cwd` taken against orckit's working directory.
       cwd: resolve(processConfig.cwd ?? '.'),
+      url: inspect.url != null ? (ctx.publicUrl?.(inspect.url) ?? inspect.url) : null,
       lastError: ctx.lastErrors.get(name),
       build: ctx.builds.get(name),
       buildErrors: ctx.buildErrors.get(name),

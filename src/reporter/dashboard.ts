@@ -5,6 +5,7 @@ import { buildGraph, type DependencyGraph } from '../graph/resolver.js';
 import { renderGraph } from './graph-view.js';
 import { formatDuration } from '../config/duration.js';
 import { brandHeader } from './brand.js';
+import { hyperlink } from './hyperlink.js';
 import { stripAnsi, type BuildEvent } from '../process/parsers.js';
 
 const HIDE_CURSOR = '\x1b[?25l';
@@ -31,6 +32,11 @@ export interface DashboardOptions {
   force?: boolean;
   /** Links rendered in the header next to the brand mark. */
   links?: DashboardLink[];
+  /**
+   * Maps a process URL to the one the user's browser can reach — the CLI
+   * passes the sandbox-host rewrite here. Identity by default.
+   */
+  publicUrl?: (url: string) => string;
 }
 
 export interface DashboardHandle {
@@ -71,11 +77,17 @@ export function attachDashboard(
   const graph: DependencyGraph = buildGraph(orckit.config);
   const project = orckit.config.project;
   const links = opts.links ?? [];
+  const publicUrl = opts.publicUrl ?? ((url: string) => url);
 
   const states = new Map<string, ProcessState>(orckit.states());
   const annotations = new Map<string, string>();
   const builds = new Map<string, BuildStatus>();
   const startedAt = new Map<string, number>();
+  const urls = new Map<string, string>();
+  for (const name of states.keys()) {
+    const url = orckit.inspect(name).url;
+    if (url) urls.set(name, publicUrl(url));
+  }
 
   let frame = 0;
   let disposed = false;
@@ -117,10 +129,18 @@ export function attachDashboard(
       if (ann) composed.set(name, ann);
     }
 
+    const urlCells = new Map<string, string>();
+    for (const [name, url] of urls) {
+      // Bright once the process is serving; dim while it's down or booting.
+      const up = states.get(name) === 'ready' || states.get(name) === 'running';
+      urlCells.set(name, hyperlink(url, up ? chalk.hex(ACCENT)(url) : chalk.dim(url)));
+    }
+
     const body = renderGraph(graph, {
       states,
       spinnerFrame: frame,
       annotations: composed,
+      urls: urlCells,
     })
       .split('\n')
       .map((line) => '  ' + line);
@@ -216,6 +236,10 @@ export function attachDashboard(
     builds.delete(name);
     redraw();
   };
+  const onUrl = (name: string, url: string) => {
+    urls.set(name, publicUrl(url));
+    redraw();
+  };
   const onBuild = (name: string, event: BuildEvent) => {
     switch (event.type) {
       case 'build:start':
@@ -250,6 +274,7 @@ export function attachDashboard(
   orckit.on('process:failed', onFailed);
   orckit.on('process:restarting', onRestarting);
   orckit.on('process:build', onBuild);
+  orckit.on('process:url', onUrl);
 
   // Initial paint.
   if (stream.isTTY) stream.write(HIDE_CURSOR);
@@ -293,6 +318,7 @@ export function attachDashboard(
       orckit.off('process:failed', onFailed);
       orckit.off('process:restarting', onRestarting);
       orckit.off('process:build', onBuild);
+      orckit.off('process:url', onUrl);
     },
   };
 }
@@ -358,7 +384,10 @@ function composeHeaderLabels(project: string | undefined, links: DashboardLink[]
   labels.push(chalk.hex(ACCENT).bold('orckit'));
   labels.push(project ? chalk.dim(project) : chalk.dim('(no project)'));
   for (const link of links) {
-    labels.push(`${chalk.hex(ACCENT_DIM)(link.label.padEnd(4))}  ${chalk.dim(link.value)}`);
+    const value = /^https?:\/\//.test(link.value)
+      ? hyperlink(link.value, chalk.dim(link.value))
+      : chalk.dim(link.value);
+    labels.push(`${chalk.hex(ACCENT_DIM)(link.label.padEnd(4))}  ${value}`);
   }
   return labels;
 }

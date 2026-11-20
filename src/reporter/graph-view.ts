@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { groupIntoWaves, type DependencyGraph } from '../graph/resolver.js';
 import type { ProcessState } from '../orchestrator/lifecycle.js';
+import { stripAnsi } from '../process/parsers.js';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -47,6 +48,12 @@ export interface RenderGraphOptions {
    * `(132ms)` for ready processes or `(retry 2)` for restarting ones.
    */
   annotations?: ReadonlyMap<string, string>;
+  /**
+   * Per-row URL cell (already styled, may carry an OSC 8 hyperlink) rendered
+   * as the last column. When any row has one, the dependency and annotation
+   * columns are padded so the URLs line up.
+   */
+  urls?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -59,7 +66,21 @@ export function renderGraph(graph: DependencyGraph, opts: RenderGraphOptions = {
   const waves = groupIntoWaves(graph);
   if (waves.length === 0) return chalk.dim('(no processes)');
 
-  const nameWidth = Math.max(0, ...[...graph.keys()].map((n) => n.length));
+  const names = [...graph.keys()];
+  const nameWidth = Math.max(0, ...names.map((n) => n.length));
+  const depPartOf = (name: string): string => {
+    const deps = graph.get(name)!;
+    return deps.length > 0 ? `  ${chalk.dim('← ' + deps.join(', '))}` : '';
+  };
+  const annPartOf = (name: string): string => {
+    const annotation = opts.annotations?.get(name);
+    return annotation ? `  ${annotation}` : '';
+  };
+  // Column widths only matter when a URL column exists: it's the last column,
+  // so everything before it is padded to line the URLs up.
+  const hasUrls = names.some((n) => opts.urls?.get(n));
+  const depWidth = hasUrls ? Math.max(0, ...names.map((n) => visibleWidth(depPartOf(n)))) : 0;
+  const annWidth = hasUrls ? Math.max(0, ...names.map((n) => visibleWidth(annPartOf(n)))) : 0;
   const lines: string[] = [];
   const spinnerIcon =
     SPINNER_FRAMES[
@@ -86,17 +107,27 @@ export function renderGraph(graph: DependencyGraph, opts: RenderGraphOptions = {
       const state = opts.states?.get(name) ?? 'pending';
       const rawIcon = state === 'starting' ? spinnerIcon : STATE_ICON[state];
       const icon = STATE_COLOR[state](rawIcon);
-      const deps = graph.get(name)!;
-      const annotation = opts.annotations?.get(name);
-      const hasTrailing = deps.length > 0 || annotation;
-      // Only pad the name when something follows; otherwise we'd emit trailing
+      const depPart = depPartOf(name);
+      const annPart = annPartOf(name);
+      const url = opts.urls?.get(name);
+      const hasTrailing = depPart || annPart || url;
+      // Only pad when something follows; otherwise we'd emit trailing
       // whitespace on every leaf row.
       const renderedName = hasTrailing ? name.padEnd(nameWidth) : name;
-      const depPart = deps.length > 0 ? `  ${chalk.dim('← ' + deps.join(', '))}` : '';
-      const annPart = annotation ? `  ${annotation}` : '';
-      lines.push(`${sideBar}  ${icon} ${renderedName}${depPart}${annPart}`);
+      const row = url
+        ? `${renderedName}${padVisible(depPart, depWidth)}${padVisible(annPart, annWidth)}  ${url}`
+        : `${renderedName}${depPart}${annPart}`;
+      lines.push(`${sideBar}  ${icon} ${row}`);
     }
     if (!isLast) lines.push(sideBar);
   }
   return lines.join('\n');
+}
+
+function visibleWidth(s: string): number {
+  return stripAnsi(s).length;
+}
+
+function padVisible(s: string, width: number): string {
+  return s + ' '.repeat(Math.max(0, width - visibleWidth(s)));
 }

@@ -186,12 +186,12 @@ killing that pid would hit the VM manager instead of the workload.
 When stdout is a TTY, `orc start` pins a persistent dashboard to the bottom of the terminal for the whole session. It has three regions:
 
 - **Header** — the orckit brand mark, project name, and labelled links to the web dashboard, MCP server, and log directory (whichever are enabled).
-- **Dependency graph** — wave-grouped tree with a state icon per process (`○` pending, `⠋` animated while starting, `✓` ready, `✗` failed) and elapsed time once it settles. Webpack/Angular builds annotate their row with `building 67%`, `built 1.2s`, or `build failed`.
+- **Dependency graph** — wave-grouped tree with a state icon per process (`○` pending, `⠋` animated while starting, `✓` ready, `✗` failed) and elapsed time once it settles. Webpack/Angular builds annotate their row with `building 67%`, `built 1.2s`, or `build failed`. A process with a [URL](#process-urls) gets it as an aligned last column — an [OSC 8](https://gist.github.com/egmontkobler/eb114294efbcd5adb1944c9f3cb5feda) hyperlink you can click (⌘-click in iTerm2) to open it in the browser, bright while the process is up and dimmed otherwise.
 - **Footer** — `N/total ready · N building · N starting · N failed` counters that update live.
 
 Preflight banners, failure tails (the recent stdout/stderr dump after a process dies), and `--show-output` lines print *above* the dashboard so they stay in scrollback while the live region keeps tracking state below them.
 
-The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. `http://` and `https://` URLs in the logs are always clickable and open in a new tab. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your already-running IDE. The browser can't open an IDE itself, so clicking POSTs to orckit, which opens the file: paths **inside the project root** (the `.idea` directory) open in your IDE via its **command-line launcher** (`webstorm --line 42 …`); paths **outside it** — temp files, generated artifacts like `/var/folders/…/mailer/x.html` — open in the OS **default application** instead. Paths are resolved to absolute against each process's working directory, so monorepo subdirectories resolve correctly. This needs no JetBrains Toolbox and no plugin — just the launcher on `PATH` (create it via the IDE's **Tools → "Create Command-Line Launcher"**). A missing/dead file or an unreachable launcher surfaces as a toast. Configure the launcher with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
+The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. Each process's [URL](#process-urls) sits in its header as a link that opens in a new tab. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. `http://` and `https://` URLs in the logs are always clickable and open in a new tab. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your already-running IDE. The browser can't open an IDE itself, so clicking POSTs to orckit, which opens the file: paths **inside the project root** (the `.idea` directory) open in your IDE via its **command-line launcher** (`webstorm --line 42 …`); paths **outside it** — temp files, generated artifacts like `/var/folders/…/mailer/x.html` — open in the OS **default application** instead. Paths are resolved to absolute against each process's working directory, so monorepo subdirectories resolve correctly. This needs no JetBrains Toolbox and no plugin — just the launcher on `PATH` (create it via the IDE's **Tools → "Create Command-Line Launcher"**). A missing/dead file or an unreachable launcher surfaces as a toast. Configure the launcher with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
 
 Pass `--no-live` to skip the dashboard entirely and get plain line-by-line lifecycle output plus the REPL.
 
@@ -280,6 +280,11 @@ processes:
                                       # if the main process is still alive after the grace period.
                                       # `type: docker` does NOT need this.
     cwd: <path>                       # default: current dir
+    url: http://localhost:4200        # optional; where the process is reachable in a browser —
+                                      # see "Process URLs". Also: `url: { pattern: <regex> }` to
+                                      # capture it from output, or `url: false` to turn it off.
+                                      # Unset: detected from dev-server output, else the origin
+                                      # of an `http` ready check.
     category: <string>                # cosmetic grouping; default: 'default'
     env: { KEY: value }
     depends_on: [other-process-name, ...]
@@ -367,6 +372,23 @@ processes:
     buffer_size: 1000   # in-memory output lines kept per process; default 1000
 ```
 
+### Process URLs
+
+A process can have a **root URL** — where it's reachable in a browser. It shows up as a clickable last column in the terminal dashboard, in the web dashboard's process header and Details tab, on the plain-mode `ready` line, and in the MCP `get_status` output. Resolution, first match wins:
+
+1. **`url: <string>`** — used as-is. For servers that never print where they listen.
+2. **`url: { pattern: <regex> }`** — the first output line matching the regex (ANSI stripped) sets the URL: capture group 1, or the whole match when the regex has no group. For custom servers with their own startup line, e.g. `pattern: 'templates on (http://\S+)'`.
+3. **Unset** — detected from well-known dev-server output, for any process `type`:
+   - `Local: http://…` — Angular ≥17, Vite, Next, CRA
+   - `Loopback: http://…` — webpack-dev-server
+   - `open your browser on http://…` — Angular ≤16
+   - `View Emulator UI at http://…` — Firebase emulators (the Emulator UI, not the hub's API port)
+
+   Until something is detected, the origin of an `http` ready check is shown (`http://localhost:3000/health` → `http://localhost:3000`).
+4. **`url: false`** — no URL, no detection.
+
+The first URL a spawn prints wins; a restart may announce a new one (and replaces the old one when it does). `0.0.0.0` binds are shown as `localhost`, a bare trailing `/` is dropped. Inside a [sandbox](#worktree-sandboxes), loopback URLs are rewritten to the sandbox hostname so they open from the Mac; URLs on other hosts are left alone.
+
 ### Process types
 
 - **bash** — default. Runs the command via `bash -c`.
@@ -441,7 +463,7 @@ Run that `claude mcp add` command once. From then on, Claude Code can call:
 
 | Tool | Returns |
 |---|---|
-| `get_status` | Every process with state, PID, uptime, retry count, and whether it's `manual_retry: true` |
+| `get_status` | Every process with state, PID, uptime, retry count, whether it's `manual_retry: true`, and its [URL](#process-urls) (or null) |
 | `get_errors` | Failed processes only, with last error message + last ~50 lines of stderr per process |
 | `get_logs` | Recent stdout/stderr for a named process (`{name, lines?, stream?}`) |
 | `get_build_status` | Build phase (building/done/failed), error/warning counts, duration, and failure diagnostics per build process (`{name?}` — omit for all) |
@@ -598,6 +620,7 @@ await orckit.dispose();        // stop everything in reverse dependency order
 | `process:restarting` | `name`, `attempt` |
 | `process:line` | `name`, `OutputLine` |
 | `process:build` | `name`, `BuildEvent` |
+| `process:url` | `name`, `url` — the process's root URL changed (detected in output or captured by `url.pattern`). Not emitted for a static `url:`; read the current value from `inspect(name).url` |
 | `hook:start` / `hook:complete` / `hook:failed` | `name`, `hook`, `Error?` |
 | `hook:line` | `name`, `hook`, `text`, `stream` — a single stdout/stderr line streamed from a running lifecycle hook |
 | `boot:complete` | `{ ready: string[], failed: string[], pending: string[] }` — always fires after `start()` |

@@ -18,6 +18,8 @@ export interface McpServerOptions {
   host?: string;
   /** Path component of the MCP endpoint. Defaults to "/mcp". */
   path?: string;
+  /** Maps a process URL to the one the client can reach (sandbox rewrite). */
+  publicUrl?: (url: string) => string;
 }
 
 export interface McpServerHandle {
@@ -65,7 +67,7 @@ export async function attachMcpServer(
       { name: 'orckit', version: ORCKIT_VERSION },
       { capabilities: { tools: {} } },
     );
-    registerTools(mcp, orckit, lastErrors, tracker);
+    registerTools(mcp, orckit, lastErrors, tracker, opts.publicUrl);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close().catch(() => {});

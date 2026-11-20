@@ -31,6 +31,7 @@ function configWith(processes: Record<string, string[]>): OrckitConfig {
 function fakeOrckit(
   config: OrckitConfig,
   initialStates?: Map<string, ProcessState>,
+  urls: Record<string, string> = {},
 ): EventEmitter & Orckit {
   const orckit = new EventEmitter() as unknown as EventEmitter & Orckit;
   (orckit as unknown as { config: OrckitConfig }).config = config;
@@ -38,6 +39,9 @@ function fakeOrckit(
     initialStates ??
     new Map(Object.keys(config.processes).map((n) => [n, 'pending' as ProcessState]));
   (orckit as unknown as { states: () => Map<string, ProcessState> }).states = () => new Map(states);
+  (orckit as unknown as { inspect: (n: string) => { url: string | null } }).inspect = (n) => ({
+    url: urls[n] ?? null,
+  });
   return orckit;
 }
 
@@ -390,5 +394,52 @@ describe('attachDashboard', () => {
     expect(orckit.listenerCount('process:ready')).toBe(0);
     expect(orckit.listenerCount('process:failed')).toBe(0);
     expect(orckit.listenerCount('process:build')).toBe(0);
+  });
+  it('renders process URLs as an aligned, OSC 8-hyperlinked last column', () => {
+    const orckit = fakeOrckit(
+      configWith({ db: [], api: ['db'], web: ['api'] }),
+      new Map<string, ProcessState>([
+        ['db', 'running'],
+        ['api', 'running'],
+        ['web', 'pending'],
+      ]),
+      { api: 'http://localhost:3000', web: 'http://localhost:4200' },
+    );
+    const stream = new FakeStream();
+    const handle = attachDashboard(orckit, {
+      stream: stream as unknown as NodeJS.WriteStream,
+      tickMs: 0,
+    })!;
+    try {
+      const raw = stream.chunks.join('');
+      expect(raw).toContain('\x1b]8;;http://localhost:3000\x1b\\');
+      const lines = stream.rendered().split('\n');
+      const api = lines.find((l) => l.includes('http://localhost:3000'))!;
+      const web = lines.find((l) => l.includes('http://localhost:4200'))!;
+      expect(api.indexOf('http://')).toBe(web.indexOf('http://'));
+      // A row without a URL gets no trailing padding.
+      const db = lines.find((l) => /\bdb\s*$/.test(l));
+      expect(db).toBeDefined();
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it('picks up URLs announced later via process:url, rewritten by publicUrl', () => {
+    const orckit = fakeOrckit(configWith({ web: [] }));
+    const stream = new FakeStream();
+    const handle = attachDashboard(orckit, {
+      stream: stream as unknown as NodeJS.WriteStream,
+      tickMs: 0,
+      publicUrl: (url) => url.replace('localhost', 'feature.app.test'),
+    })!;
+    try {
+      expect(stream.rendered()).not.toContain('http://');
+      orckit.emit('process:url', 'web', 'http://localhost:4200');
+      expect(stream.rendered()).toContain('http://feature.app.test:4200');
+    } finally {
+      handle.dispose();
+    }
+    expect(orckit.listenerCount('process:url')).toBe(0);
   });
 });

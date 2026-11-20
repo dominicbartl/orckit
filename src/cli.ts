@@ -48,6 +48,7 @@ import {
   stopSandbox,
 } from './sandbox/engine.js';
 import type { IdeLink } from './web/ide.js';
+import { rewriteLoopbackHost } from './process/url.js';
 
 const program = new Command()
   .name('orc')
@@ -198,6 +199,10 @@ program
       const sandboxHost = process.env.ORCKIT_SANDBOX_HOST;
       const publicUrl = (url: string) =>
         sandboxHost ? url.replace(/^(\w+:\/\/)(\[[^\]]*\]|[^/:]+)/, `$1${sandboxHost}`) : url;
+      // Process URLs (dev servers on localhost) get the same treatment, but
+      // only for loopback hosts — an explicit external `url:` stays as-is.
+      const processUrl = (url: string) =>
+        sandboxHost ? rewriteLoopbackHost(url, sandboxHost) : url;
       const mcpName = sandboxName ?? 'orckit';
 
       const orckit = new Orckit(config);
@@ -288,6 +293,7 @@ program
           mcpServer = await attachMcpServer(orckit, {
             port: cliMcpPort ?? config.mcp.port,
             host: config.mcp.host,
+            publicUrl: processUrl,
           });
           links.push({ label: 'mcp', value: publicUrl(mcpServer.url) });
         } catch (err) {
@@ -328,6 +334,7 @@ program
             host: config.web.host,
             ide,
             openRelay: process.env.ORCKIT_OPEN_RELAY,
+            publicUrl: processUrl,
           });
           // Web dashboard is the headline action surface — show it first.
           links.unshift({ label: 'web', value: publicUrl(webServer.url) });
@@ -348,7 +355,7 @@ program
       // cli-reporter rides above it for preflight banners, failure tails,
       // and (optionally) raw output / build events.
       const dashboard: DashboardHandle | null =
-        opts.live === false ? null : attachDashboard(orckit, { links });
+        opts.live === false ? null : attachDashboard(orckit, { links, publicUrl: processUrl });
 
       let repl: Repl | null = null;
 
@@ -365,6 +372,7 @@ program
           out: dashboard.printAbove,
           quietProcessEvents: true,
           printHint: dashboard.printAbove,
+          publicUrl: processUrl,
         });
       } else {
         // Plain mode: print the header inline (lines, not a live region) so
@@ -381,6 +389,7 @@ program
           showOutput: opts.showOutput,
           showBuild: opts.showBuild,
           printHint: (msg) => (repl ? repl.printHint(msg) : console.log('\n' + msg)),
+          publicUrl: processUrl,
         });
       }
 

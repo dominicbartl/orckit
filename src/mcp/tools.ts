@@ -19,6 +19,7 @@ export interface OrckitView {
     pid: number | null;
     startedAt: number | null;
     retries: number;
+    url: string | null;
   };
   states(): Map<string, ProcessState>;
   output(name: string, n?: number): OutputLine[];
@@ -32,6 +33,8 @@ export interface StatusEntry {
   uptimeMs: number | null;
   retries: number;
   manualRetry: boolean;
+  /** Where the process is reachable in a browser, or null. */
+  url: string | null;
 }
 
 export interface ErrorEntry {
@@ -76,7 +79,10 @@ const STATE_ICON: Record<ProcessState, string> = {
   failed: '✗',
 };
 
-export function buildStatus(orckit: OrckitView): StatusEntry[] {
+export function buildStatus(
+  orckit: OrckitView,
+  publicUrl: (url: string) => string = (url) => url,
+): StatusEntry[] {
   const now = Date.now();
   const entries: StatusEntry[] = [];
   for (const [name, processConfig] of Object.entries(orckit.config.processes)) {
@@ -89,6 +95,7 @@ export function buildStatus(orckit: OrckitView): StatusEntry[] {
       uptimeMs: info.startedAt != null ? now - info.startedAt : null,
       retries: info.retries,
       manualRetry: processConfig.manual_retry,
+      url: info.url != null ? publicUrl(info.url) : null,
     });
   }
   return entries;
@@ -146,7 +153,7 @@ export function formatStatusText(entries: StatusEntry[]): string {
     const pidPart = e.pid != null ? `pid ${e.pid}` : '';
     const upPart = e.uptimeMs != null ? `up ${formatDuration(e.uptimeMs)}` : '';
     const retryPart = e.retries > 0 ? `retries ${e.retries}` : '';
-    const tail = [pidPart, upPart, retryPart].filter(Boolean).join('  ');
+    const tail = [pidPart, upPart, retryPart, e.url ?? ''].filter(Boolean).join('  ');
     lines.push(
       `  ${STATE_ICON[e.state]} ${e.name.padEnd(nameW)}  ${e.state.padEnd(stateW)}  ${tail}`,
     );
@@ -412,6 +419,7 @@ export function registerTools(
   orckit: Orckit,
   lastErrors: Map<string, string>,
   tracker: BuildTracker,
+  publicUrl?: (url: string) => string,
 ): void {
   server.registerTool(
     'get_status',
@@ -421,11 +429,12 @@ export function registerTools(
         'Get the current status of all processes managed by orckit for this project. ' +
         'Returns each process name, lifecycle state ' +
         '(pending/starting/ready/running/finished/stopping/stopped/failed), PID, uptime, ' +
-        'retry count, and whether the process is marked manual_retry. Use this to answer ' +
-        '"is the build running" or "what state is the API in".',
+        'retry count, whether the process is marked manual_retry, and its URL (where it is ' +
+        'reachable in a browser, e.g. a dev server) when it has one. Use this to answer ' +
+        '"is the build running", "what state is the API in" or "where is the frontend served".',
     },
     async () => {
-      const entries = buildStatus(orckit);
+      const entries = buildStatus(orckit, publicUrl);
       return toResult(formatStatusText(entries), { processes: entries });
     },
   );

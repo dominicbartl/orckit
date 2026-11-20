@@ -12,7 +12,11 @@ import { reduceBuild } from '../process/parsers.js';
  * graph topology) flows via `process:line` events and the initial snapshot
  * fetch, not via SSE replays.
  */
-export function streamOrckitEvents(orckit: Orckit, res: ServerResponse): () => void {
+export function streamOrckitEvents(
+  orckit: Orckit,
+  res: ServerResponse,
+  publicUrl: (url: string) => string = (url) => url,
+): () => void {
   const send = (event: string, data: unknown) => {
     if (res.writableEnded) return;
     res.write(`event: ${event}\n`);
@@ -62,6 +66,7 @@ export function streamOrckitEvents(orckit: Orckit, res: ServerResponse): () => v
   // momentary event — the client pins it next to the process, so it wants
   // "where the build stands" not "what just happened".
   on('process:build', (name, event) => send('build', { name, build: reduceBuild(event) }));
+  on('process:url', (name, url) => send('url', { name, url: publicUrl(url) }));
   on('boot:complete', (summary) => send('boot:complete', summary));
   on('all:ready', (names) => send('all:ready', { names }));
 

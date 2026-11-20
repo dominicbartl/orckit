@@ -70,6 +70,31 @@ const restartPolicySchema = z.enum(['always', 'on-failure', 'never']).default('n
 
 const processTypeSchema = z.enum(['bash', 'webpack', 'angular', 'docker']).default('bash');
 
+const urlPatternSchema = z.object({
+  /**
+   * Regex matched against each output line (ANSI stripped). The first capture
+   * group — or the whole match when there is none — becomes the URL.
+   */
+  pattern: z.string().min(1).refine(isValidRegex, { message: 'invalid regular expression' }),
+});
+
+/**
+ * Where the process can be opened in a browser. A string is used as-is; a
+ * `{ pattern }` captures it from output; `false` turns URLs off. Unset, orckit
+ * detects it from well-known dev-server output (`Local: http://…`, Firebase's
+ * `View Emulator UI at …`) and falls back to the origin of an `http` ready check.
+ */
+const processUrlSchema = z.union([z.string().url(), urlPatternSchema, z.literal(false)]);
+
+function isValidRegex(source: string): boolean {
+  try {
+    new RegExp(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
 export const processConfigSchema = z
@@ -109,6 +134,12 @@ export const processConfigSchema = z
       )
       .optional(),
     cwd: z.string().optional(),
+    /**
+     * The process's root URL — where it's reachable in a browser. Shown as a
+     * clickable column in the terminal dashboard and in the web UI's process
+     * header. Unset → auto-detected (see `processUrlSchema`).
+     */
+    url: processUrlSchema.optional(),
     env: z.record(z.string(), z.string()).default({}),
     depends_on: z.array(z.string()).default([]),
     ready: readyCheckSchema.optional(),
@@ -402,6 +433,7 @@ export type OutputFilter = z.infer<typeof outputFilterSchema>;
 export type HookConfig = z.infer<typeof hookConfigSchema>;
 export type RestartPolicy = z.infer<typeof restartPolicySchema>;
 export type ProcessType = z.infer<typeof processTypeSchema>;
+export type ProcessUrl = z.infer<typeof processUrlSchema>;
 export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;

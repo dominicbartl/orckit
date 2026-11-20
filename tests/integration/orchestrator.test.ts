@@ -522,4 +522,24 @@ describe('Orckit end-to-end', () => {
     await orckit.start();
     expect(orckit.state('svc')).toBe('running');
   });
+  it('detects a dev-server URL from output and emits process:url once per spawn', async () => {
+    orckit = new Orckit(
+      makeConfig({
+        web: {
+          command:
+            "echo '  ➜  Local:   http://localhost:4321/'; echo '  ➜  Local:   http://localhost:9999/'; sleep 5",
+          ready: { type: 'log-pattern', pattern: 'Local' },
+        },
+        fixed: { command: 'sleep 5', url: 'http://localhost:8000' },
+      }),
+    );
+    const seen: Array<[string, string]> = [];
+    orckit.on('process:url', (name, url) => seen.push([name, url]));
+    expect(orckit.inspect('fixed').url).toBe('http://localhost:8000');
+    expect(orckit.inspect('web').url).toBeNull();
+    await orckit.startTargets(['web']);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(orckit.inspect('web').url).toBe('http://localhost:4321');
+    expect(seen).toEqual([['web', 'http://localhost:4321']]);
+  });
 });

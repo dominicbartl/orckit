@@ -6,7 +6,8 @@ project: fullstack
 # Each subdirectory is its own pnpm workspace with `pre_start: pnpm install`.
 # Categories group processes in the CLI reporter. Output filters trim noise
 # and color errors. The web service uses `type: webpack` so the webpack
-# parser can emit build:start / build:complete events.
+# parser can emit build:start / build:complete events. `url` on web shows how
+# to capture a process URL from output.
 
 preflight:
   - name: node-installed
@@ -83,6 +84,11 @@ processes:
     env:
       PORT: '3005'
       API_URL: http://localhost:3004
+    # The dev server prints `web listening on http://localhost:3005` — capture
+    # it so the dashboards show a clickable URL. (`api` needs nothing: its http
+    # ready check's origin, http://localhost:3004, is used automatically.)
+    url:
+      pattern: 'listening on (http://\S+)'
     hooks:
       pre_start: pnpm install --ignore-workspace --silent
     ready:

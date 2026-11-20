@@ -95,4 +95,21 @@ describe('renderGraph', () => {
     expect(out).toContain('○ db   (132ms)'); // db padded to width 3 (longest name = api)
     expect(out).toContain('○ api  ← db  (840ms)');
   });
+  it('renders URLs as an aligned last column and pads only rows that have one', () => {
+    const graph = buildGraph(configWith({ db: [], api: ['db'], web: ['api'] }));
+    const out = stripAnsi(
+      renderGraph(graph, {
+        annotations: new Map([['api', '(1.2s)']]),
+        urls: new Map([
+          ['api', 'http://localhost:3000'],
+          ['web', 'http://localhost:4200'],
+        ]),
+      }),
+    ).split('\n');
+    const api = out.find((l) => l.includes(':3000'))!;
+    const web = out.find((l) => l.includes(':4200'))!;
+    expect(api.indexOf('http')).toBe(web.indexOf('http'));
+    expect(api.indexOf('http')).toBeGreaterThan(api.indexOf('(1.2s)'));
+    expect(out.find((l) => /\bdb$/.test(l))).toBeDefined();
+  });
 });
