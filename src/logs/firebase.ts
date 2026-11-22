@@ -205,7 +205,7 @@ export function createFirebaseLogAssembler(): FirebaseLogAssembler {
     if (open && continues(open, text)) {
       open.lines.push(text);
       open.lastTs = ts;
-      open.depth = Math.max(0, open.depth + bracketDelta(text));
+      open.depth = nextDepth(open.depth, text);
       // A closing bracket in column 0 ends a top-level inspect block.
       if (open.depth === 0 && /^[}\]]/.test(text)) close(open);
       return;
@@ -222,7 +222,7 @@ export function createFirebaseLogAssembler(): FirebaseLogAssembler {
       fn,
       lines: [text],
       lastTs: ts,
-      depth: Math.max(0, bracketDelta(text)),
+      depth: nextDepth(0, text),
       closed: false,
     };
     openByFn.set(key, entry);
@@ -245,6 +245,18 @@ export function createFirebaseLogAssembler(): FirebaseLogAssembler {
  */
 function continues(entry: OpenEntry, text: string): boolean {
   return entry.depth > 0 || /^[ \t]/.test(text) || /^[}\]]/.test(text);
+}
+
+/**
+ * Bracket depth after `text`. Inside an open block every bracket counts;
+ * outside one, only a line ending in `{`/`[` opens a block — that's how
+ * util.inspect starts a multi-line dump. A stray bracket in prose
+ * (`Unexpected token { in JSON`) must not, or every later line of the function
+ * would merge into this entry until the next quiet gap.
+ */
+function nextDepth(depth: number, text: string): number {
+  if (depth === 0 && !/[{[]\s*$/.test(text)) return 0;
+  return Math.max(0, depth + bracketDelta(text));
 }
 
 /** Net `{`/`[` opened by a line, ignoring brackets inside quoted strings. */

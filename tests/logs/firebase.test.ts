@@ -216,6 +216,16 @@ describe('createFirebaseLogAssembler — merging', () => {
     expect(toJson((out[0] as UserLogEntry).value!)).toEqual({ note: 'unbalanced [ in string' });
   });
 
+  it('does not open a block on a stray bracket in prose', () => {
+    const entries = assemble([
+      user('A', 0, 'SyntaxError: Unexpected token { in JSON at position 0'),
+      user('A', 10, 'request 2 done'),
+      user('A', 20, 'request 3 done'),
+    ]);
+    expect(logs(entries).map((e) => e.lineCount)).toEqual([1, 1, 1]);
+    expect(logs(entries)[0]!.level).toBe('error');
+  });
+
   it('treats a lone JSON line as structured but not a parsed fragment of a dump', () => {
     const a = createFirebaseLogAssembler();
     a.push(user('A', 0, 'list ['));
