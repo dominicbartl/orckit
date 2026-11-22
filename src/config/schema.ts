@@ -84,7 +84,16 @@ const urlPatternSchema = z.object({
  * detects it from well-known dev-server output (`Local: http://…`, Firebase's
  * `View Emulator UI at …`) and falls back to the origin of an `http` ready check.
  */
-const processUrlSchema = z.union([z.string().url(), urlPatternSchema, z.literal(false)]);
+const processUrlSchema = z.union([
+  // `z.string().url()` alone accepts `localhost:4200` (scheme `localhost:`) and
+  // `javascript:…`, which would validate and then silently show no URL.
+  z
+    .string()
+    .url()
+    .refine((s) => /^https?:\/\//i.test(s), { message: 'url must start with http:// or https://' }),
+  urlPatternSchema,
+  z.literal(false),
+]);
 
 function isValidRegex(source: string): boolean {
   try {

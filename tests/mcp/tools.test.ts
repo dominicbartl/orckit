@@ -32,7 +32,7 @@ function makeBuildView(procs: Record<string, { type?: string; state?: ProcessSta
     inspect(name) {
       const p = procs[name];
       if (!p) throw new Error(`unknown process "${name}"`);
-      return { state: p.state ?? 'running', pid: null, startedAt: null, retries: 0 };
+      return { state: p.state ?? 'running', pid: null, startedAt: null, retries: 0, url: null };
     },
     states() {
       return new Map(Object.entries(procs).map(([n, p]) => [n, p.state ?? 'running']));
@@ -58,7 +58,13 @@ function makeView(setup: {
   processes: Record<string, { manual_retry?: boolean }>;
   inspect: Record<
     string,
-    { state: ProcessState; pid?: number | null; startedAt?: number | null; retries?: number }
+    {
+      state: ProcessState;
+      pid?: number | null;
+      startedAt?: number | null;
+      retries?: number;
+      url?: string | null;
+    }
   >;
   output?: Record<string, OutputLine[]>;
 }): OrckitView {
@@ -82,6 +88,7 @@ function makeView(setup: {
         pid: info.pid ?? null,
         startedAt: info.startedAt ?? null,
         retries: info.retries ?? 0,
+        url: info.url ?? null,
       };
     },
     states() {
@@ -117,6 +124,22 @@ describe('buildStatus', () => {
     expect(api.uptimeMs).toBeNull();
     expect(api.retries).toBe(2);
     expect(api.manualRetry).toBe(true);
+  });
+
+  it('reports each URL through publicUrl, and null when there is none', () => {
+    const view = makeView({
+      processes: { web: {}, db: {} },
+      inspect: {
+        web: { state: 'running', url: 'http://localhost:4200' },
+        db: { state: 'running' },
+      },
+    });
+
+    const status = buildStatus(view, (url) => url.replace('localhost', 'wt.app.test'));
+
+    expect(status.find((s) => s.name === 'web')!.url).toBe('http://wt.app.test:4200');
+    expect(status.find((s) => s.name === 'db')!.url).toBeNull();
+    expect(formatStatusText(status)).toContain('http://wt.app.test:4200');
   });
 });
 

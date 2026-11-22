@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachCliReporter, printFailureDump } from '../../src/reporter/cli-reporter.js';
 import type { Orckit } from '../../src/orchestrator/orchestrator.js';
 import type { OutputLine } from '../../src/process/output.js';
+import { stripAnsi } from '../../src/process/parsers.js';
 
 function makeFakeOrckit(outputs: Map<string, OutputLine[]> = new Map()): EventEmitter & Orckit {
   const orckit = new EventEmitter() as unknown as EventEmitter & Orckit;
@@ -209,5 +210,50 @@ describe('printFailureDump', () => {
     const captured: string[] = [];
     printFailureDump(makeFakeOrckit(), [], new Map(), { out: (m) => captured.push(m) });
     expect(captured).toEqual([]);
+  });
+});
+
+describe('attachCliReporter — process URLs', () => {
+  function urlOrckit(urls: Record<string, string>, states: Record<string, string>) {
+    const orckit = makeFakeOrckit();
+    (orckit as unknown as { inspect: (n: string) => { url: string | null } }).inspect = (n) => ({
+      url: urls[n] ?? null,
+    });
+    (orckit as unknown as { state: (n: string) => string }).state = (n) => states[n] ?? 'pending';
+    return orckit;
+  }
+
+  it('appends the URL to the ready line, rewritten by publicUrl', () => {
+    const orckit = urlOrckit({ web: 'http://localhost:4200' }, { web: 'ready' });
+    const captured: string[] = [];
+    attachCliReporter(orckit, {
+      out: (m) => captured.push(m),
+      publicUrl: (url) => url.replace('localhost', 'wt.app.test'),
+    });
+    orckit.emit('process:ready', 'web', 120);
+    orckit.emit('process:ready', 'db', 80);
+    const out = captured.map(stripAnsi);
+    expect(out.find((l) => l.includes('web ready'))).toContain('http://wt.app.test:4200');
+    expect(out.find((l) => l.includes('db ready'))).not.toContain('http');
+  });
+
+  it('prints a URL announced after ready on its own line, and not one found while starting', () => {
+    const states: Record<string, string> = { web: 'starting' };
+    const orckit = urlOrckit({}, states);
+    const captured: string[] = [];
+    attachCliReporter(orckit, { out: (m) => captured.push(m) });
+    orckit.emit('process:url', 'web', 'http://localhost:4200');
+    expect(captured).toHaveLength(0);
+    states.web = 'running';
+    orckit.emit('process:url', 'web', 'http://localhost:4300');
+    expect(captured.map(stripAnsi)).toEqual(['  ↗ web http://localhost:4300']);
+  });
+
+  it('stays silent under quietProcessEvents', () => {
+    const orckit = urlOrckit({}, { web: 'running' });
+    const captured: string[] = [];
+    attachCliReporter(orckit, { out: (m) => captured.push(m), quietProcessEvents: true });
+    orckit.emit('process:url', 'web', 'http://localhost:4200');
+    expect(captured).toHaveLength(0);
   });
 });

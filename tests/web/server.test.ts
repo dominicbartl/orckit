@@ -251,6 +251,60 @@ describe('attachWebUi over HTTP', () => {
   });
 });
 
+describe('attachWebUi process URLs', () => {
+  let orckit: Orckit;
+  let server: WebUiServerHandle;
+  const rewrite = (url: string) => url.replace('localhost', 'wt.app.test');
+
+  beforeEach(async () => {
+    orckit = new Orckit(
+      validateConfig({
+        project: 'web-url-test',
+        processes: {
+          web: { command: 'sleep 1', url: 'http://localhost:4200' },
+          db: { command: 'sleep 1' },
+        },
+      }),
+    );
+    server = await attachWebUi(orckit, { port: 0, publicUrl: rewrite });
+  });
+
+  afterEach(async () => {
+    await server.dispose();
+    await orckit.dispose();
+  });
+
+  it('GET /api/state carries each URL through publicUrl, null when there is none', async () => {
+    const json = (await (await fetch(`${server.url}/api/state`)).json()) as {
+      processes: Array<{ name: string; url: string | null }>;
+    };
+    expect(json.processes.find((p) => p.name === 'web')!.url).toBe('http://wt.app.test:4200');
+    expect(json.processes.find((p) => p.name === 'db')!.url).toBeNull();
+  });
+
+  it('GET /events rewrites the snapshot and streams process:url as a url event', async () => {
+    const res = await fetch(`${server.url}/events`, { headers: { accept: 'text/event-stream' } });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const readUntil = async (needle: string) => {
+      while (!buf.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+    };
+    await readUntil('event: snapshot');
+    await readUntil('wt.app.test:4200');
+    expect(buf).not.toContain('"url":"http://localhost:4200"');
+    orckit.emit('process:url', 'db', 'http://localhost:5555');
+    await readUntil('event: url');
+    await readUntil('wt.app.test:5555');
+    expect(buf).toContain('"name":"db"');
+    await reader.cancel();
+  });
+});
+
 describe('isUnderRoot / defaultOpenCommand', () => {
   it('isUnderRoot: true for the root itself and files inside it', () => {
     expect(isUnderRoot('/repo', '/repo')).toBe(true);

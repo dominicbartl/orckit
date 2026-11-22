@@ -376,7 +376,7 @@ processes:
 
 A process can have a **root URL** — where it's reachable in a browser. It shows up as a clickable last column in the terminal dashboard, in the web dashboard's process header and Details tab, on the plain-mode `ready` line, and in the MCP `get_status` output. Resolution, first match wins:
 
-1. **`url: <string>`** — used as-is. For servers that never print where they listen.
+1. **`url: <string>`** — used as-is; must start with `http://` or `https://`. For servers that never print where they listen.
 2. **`url: { pattern: <regex> }`** — the first output line matching the regex (ANSI stripped) sets the URL: capture group 1, or the whole match when the regex has no group. For custom servers with their own startup line, e.g. `pattern: 'templates on (http://\S+)'`.
 3. **Unset** — detected from well-known dev-server output, for any process `type`:
    - `Local: http://…` — Angular ≥17, Vite, Next, CRA

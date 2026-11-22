@@ -191,7 +191,7 @@ templates:
 ```
 
 - Don't hard-code `url:` on Angular/Vite/Next/Firebase processes — detection already finds it and follows a port change.
-- `pattern` is matched per line with ANSI codes stripped; with no capture group the whole match is used. Invalid regexes fail validation.
+- `pattern` is matched per line with ANSI codes stripped; with no capture group the whole match is used. Invalid regexes fail validation, and so does a static `url:` without an `http://` or `https://` scheme.
 - Inside a sandbox, loopback URLs are rewritten to the sandbox hostname automatically — write `localhost`, not the sandbox domain.
 
 ## `output` filters
@@ -280,6 +280,7 @@ When you run `orc start` yourself in a worktree that has `sandbox:` (or in the m
 10. Hooks that "clean up a port" must never kill the holder of a *published container port* — that is the container platform's proxy (Docker Desktop, OrbStack), and killing it takes down the whole Docker daemon without freeing the port. Remove the container instead, or let `type: docker` do it.
 11. No secrets in `env`.
 12. With a `sandbox:` block: every git-ignored file a process reads is in `copy_files`, and every non-Node tool a process or hook calls (`java`, `stripe`, `gcloud`, …) is installed by `sandbox.dockerfile`.
+13. `url:` is only set where detection can't find it (Angular/Vite/Next/Firebase print theirs), and a static `url:` starts with `http://` or `https://` — validation rejects anything else. Write `localhost`, not a sandbox domain.
 
 ## Programmatic API
 

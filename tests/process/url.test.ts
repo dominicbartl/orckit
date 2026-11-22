@@ -51,6 +51,14 @@ describe('normalizeUrl', () => {
   it('trims trailing prose punctuation', () => {
     expect(normalizeUrl('http://localhost:3000).')).toBe('http://localhost:3000');
   });
+  it('keeps a closing bracket that belongs to the URL', () => {
+    expect(normalizeUrl('http://[::1]')).toBe('http://[::1]');
+    expect(normalizeUrl('http://localhost:3000/wiki/A_(b)')).toBe(
+      'http://localhost:3000/wiki/A_(b)',
+    );
+    expect(normalizeUrl('(see http://localhost:3000/)')).toBeNull();
+    expect(normalizeUrl('http://localhost:3000/).')).toBe('http://localhost:3000');
+  });
   it('rejects non-http URLs', () => {
     expect(normalizeUrl('ftp://localhost')).toBeNull();
     expect(normalizeUrl('localhost:3000')).toBeNull();
@@ -71,6 +79,16 @@ describe('initialUrl / urlMatcher', () => {
     const c = config({ ready: { type: 'http', url: 'http://localhost:3004/health' } });
     expect(initialUrl(c)).toBe('http://localhost:3004');
     expect(urlMatcher(c)?.('  ➜  Local:   http://localhost:4200/')).toBe('http://localhost:4200');
+  });
+
+  it('swaps a wildcard bind in the ready-check origin for localhost', () => {
+    const c = config({ ready: { type: 'http', url: 'http://0.0.0.0:3004/health' } });
+    expect(initialUrl(c)).toBe('http://localhost:3004');
+  });
+
+  it('rejects a static url without an http(s) scheme at config time', () => {
+    expect(() => config({ url: 'localhost:4200' })).toThrow(/http:\/\/ or https:\/\//);
+    expect(() => config({ url: 'javascript:alert(1)' })).toThrow();
   });
 
   it('has nothing without a ready check or output', () => {

@@ -50,7 +50,7 @@ export function initialUrl(config: Pick<ProcessConfig, 'url' | 'ready'>): string
   if (config.url) return null; // pattern: wait for the line
   if (config.ready?.type === 'http') {
     const url = parseUrl(config.ready.url);
-    return url ? formatUrl(new URL(url.origin)) : null;
+    return url ? normalizeUrl(url.origin) : null;
   }
   return null;
 }
@@ -76,11 +76,32 @@ export function urlMatcher(config: Pick<ProcessConfig, 'url'>): UrlMatcher | nul
  * drop a bare trailing `/`. Null when what's left isn't an http(s) URL.
  */
 export function normalizeUrl(raw: string): string | null {
-  const trimmed = raw.trim().replace(/[\s│┃|*,.;:!?'")\]}>]+$/u, '');
-  const url = parseUrl(trimmed);
+  const url = parseUrl(trimTrailing(raw.trim()));
   if (!url) return null;
   if (url.hostname === '0.0.0.0' || url.hostname === '[::]') url.hostname = 'localhost';
   return formatUrl(url);
+}
+
+const TRAILING_PUNCT = /[\s│┃|*,.;:!?'"`>]/u;
+const CLOSER_TO_OPENER: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+
+/**
+ * Strip trailing prose punctuation. A closing bracket goes only when it's
+ * unbalanced — `(see http://x/)` loses its `)`, `http://[::1]` keeps its `]`.
+ */
+function trimTrailing(s: string): string {
+  for (;;) {
+    const last = s.at(-1);
+    if (last === undefined) return s;
+    const opener = CLOSER_TO_OPENER[last];
+    const unbalanced = opener !== undefined && count(s, opener) < count(s, last);
+    if (!TRAILING_PUNCT.test(last) && !unbalanced) return s;
+    s = s.slice(0, -1);
+  }
+}
+
+function count(s: string, ch: string): number {
+  return s.split(ch).length - 1;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '[::]']);

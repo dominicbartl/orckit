@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import chalk from 'chalk';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { attachDashboard } from '../../src/reporter/dashboard.js';
 import { stripAnsi } from '../../src/process/parsers.js';
@@ -396,6 +397,8 @@ describe('attachDashboard', () => {
     expect(orckit.listenerCount('process:build')).toBe(0);
   });
   it('renders process URLs as an aligned, OSC 8-hyperlinked last column', () => {
+    const level = chalk.level;
+    chalk.level = 1; // hyperlinks are only emitted where escapes are supported
     const orckit = fakeOrckit(
       configWith({ db: [], api: ['db'], web: ['api'] }),
       new Map<string, ProcessState>([
@@ -422,6 +425,7 @@ describe('attachDashboard', () => {
       expect(db).toBeDefined();
     } finally {
       handle.dispose();
+      chalk.level = level;
     }
   });
 
