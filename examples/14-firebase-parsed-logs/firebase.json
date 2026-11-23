@@ -1,0 +1,10 @@
+{
+  "functions": [{ "source": "functions", "codebase": "default" }],
+  "emulators": {
+    "hub": { "port": 4471 },
+    "logging": { "port": 4571 },
+    "functions": { "port": 5171 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

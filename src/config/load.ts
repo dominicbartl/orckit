@@ -40,5 +40,19 @@ export function validateConfig(raw: unknown, source?: string): OrckitConfig {
       .join('\n');
     throw new ConfigError(`invalid configuration:\n${issues}`, source);
   }
-  return result.data;
+  return withLoggingEmulator(result.data);
+}
+
+/**
+ * firebase-tools only starts its logging emulator alongside the Emulator UI,
+ * or when `START_LOGGING_EMULATOR=true`. A process reading `parsed_logs` from
+ * it gets the variable unless its `env` already sets it either way.
+ */
+function withLoggingEmulator(config: OrckitConfig): OrckitConfig {
+  for (const processConfig of Object.values(config.processes)) {
+    if (processConfig.parsed_logs?.source !== 'firebase') continue;
+    if ('START_LOGGING_EMULATOR' in processConfig.env) continue;
+    processConfig.env = { ...processConfig.env, START_LOGGING_EMULATOR: 'true' };
+  }
+  return config;
 }

@@ -3,6 +3,7 @@ import type { Orckit } from '../orchestrator/orchestrator.js';
 import type { ProcessState } from '../orchestrator/lifecycle.js';
 import type { OutputLine } from '../process/output.js';
 import type { BuildStatus } from '../process/parsers.js';
+import type { ParsedLogState, ParsedLogTracker } from '../logs/tracker.js';
 import type { IdeLink } from './ide.js';
 
 export interface ProcessSnapshot {
@@ -30,6 +31,16 @@ export interface ProcessSnapshot {
   build?: BuildStatus;
   /** Diagnostic lines from the latest failing build, if any. Cleared on rebuild/success. */
   buildErrors?: string[];
+  /** Present when the process has `parsed_logs`; entries come from `/api/logs/:name`. */
+  parsedLogs?: ParsedLogsSnapshot;
+}
+
+export interface ParsedLogsSnapshot {
+  state: ParsedLogState;
+  /** Connection the entries belong to; SSE `parsed:*` events carry it too. */
+  generation: number;
+  /** Entries currently kept. */
+  count: number;
 }
 
 export interface OrckitSnapshot {
@@ -50,6 +61,8 @@ export interface SnapshotContext {
   ide: IdeLink | null;
   /** Maps a process URL to the one the browser can reach. Identity when omitted. */
   publicUrl?: (url: string) => string;
+  /** Parsed log sources, when any process has `parsed_logs`. */
+  parsedLogs?: ParsedLogTracker | null;
 }
 
 /**
@@ -78,6 +91,7 @@ export function buildSnapshot(orckit: Orckit, ctx: SnapshotContext): OrckitSnaps
       lastError: ctx.lastErrors.get(name),
       build: ctx.builds.get(name),
       buildErrors: ctx.buildErrors.get(name),
+      parsedLogs: parsedLogsSnapshot(ctx.parsedLogs, name),
     });
   }
   return {
@@ -85,6 +99,15 @@ export function buildSnapshot(orckit: Orckit, ctx: SnapshotContext): OrckitSnaps
     processes,
     ide: ctx.ide,
   };
+}
+
+function parsedLogsSnapshot(
+  tracker: ParsedLogTracker | null | undefined,
+  name: string,
+): ParsedLogsSnapshot | undefined {
+  const state = tracker?.state(name);
+  if (!tracker || !state) return undefined;
+  return { state, generation: tracker.generation(name), count: tracker.count(name) };
 }
 
 export function recentOutput(orckit: Orckit, name: string, n = 200): OutputLine[] {

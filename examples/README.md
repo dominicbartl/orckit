@@ -19,6 +19,7 @@ install` hook bootstrap their dependencies on first run.
 | [`11-docker`](11-docker) | `type: docker` + `container_name` — auto orphan-cleanup before spawn, auto `docker rm -f` on shutdown |
 | [`12-angular`](12-angular) | `type: angular` — real `ng serve` app, build-output parser, `ready: http` |
 | [`13-sandbox`](13-sandbox) | `sandbox:` — one isolated OrbStack container per git worktree, same ports in each, `orc sandbox` commands |
+| [`14-firebase-parsed-logs`](14-firebase-parsed-logs) | `parsed_logs` — Firebase Functions emulator logs parsed into execution / log entries, served at `GET /api/logs/:name` |
 
 Run any example:
 

@@ -13,6 +13,7 @@ import { streamOrckitEvents } from './events.js';
 import { resolveStaticDir, serveStaticAsset } from './static.js';
 import type { IdeLink } from './ide.js';
 import { isUnderRoot, openFile } from './open.js';
+import type { ParsedLogTracker } from '../logs/tracker.js';
 
 export interface WebUiServerOptions {
   /** Port to bind. Use 0 for an arbitrary free port. */
@@ -31,6 +32,11 @@ export interface WebUiServerOptions {
   openRelay?: string;
   /** Maps a process URL to the one the browser can reach (sandbox rewrite). */
   publicUrl?: (url: string) => string;
+  /**
+   * Parsed log sources (`parsed_logs`). Created once by the caller and shared
+   * with the MCP server, since it owns the emulator sockets; not disposed here.
+   */
+  parsedLogs?: ParsedLogTracker | null;
 }
 
 export interface WebUiServerHandle {
@@ -47,6 +53,7 @@ export interface WebUiServerHandle {
  *   GET  /assets/*            → bundled JS/CSS/fonts
  *   GET  /api/state           → full snapshot (initial hydration)
  *   GET  /api/output/:name    → recent N lines from a process buffer
+ *   GET  /api/logs/:name      → parsed log entries (`parsed_logs`), ?limit=N
  *   GET  /events              → SSE stream of orckit events
  *   POST /api/restart/:name   → restart a process (cascade by default)
  *   POST /api/start/:name     → start a process (+ deps, skipping running ones)
@@ -64,6 +71,7 @@ export async function attachWebUi(
   const ide = opts.ide ?? null;
   const openRelay = opts.openRelay;
   const publicUrl = opts.publicUrl ?? ((url: string) => url);
+  const parsedLogs = opts.parsedLogs ?? null;
   const staticDir = resolveStaticDir();
 
   // Track last error per process so the initial snapshot can surface it
@@ -108,7 +116,7 @@ export async function attachWebUi(
       sendJson(
         res,
         200,
-        buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl }),
+        buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl, parsedLogs }),
       );
       return;
     }
@@ -120,6 +128,28 @@ export async function attachWebUi(
       } catch (err) {
         sendJson(res, 404, { error: (err as Error).message });
       }
+      return;
+    }
+
+    if (method === 'GET' && path.startsWith('/api/logs/')) {
+      const name = decodeURIComponent(path.slice('/api/logs/'.length));
+      const state = parsedLogs?.state(name);
+      if (!parsedLogs || !state) {
+        sendJson(res, 404, { error: `process "${name}" has no parsed_logs source` });
+        return;
+      }
+      const limitParam = new URL(url, 'http://localhost').searchParams.get('limit');
+      const limit = limitParam === null ? undefined : Number(limitParam);
+      if (limit !== undefined && !(Number.isInteger(limit) && limit >= 0)) {
+        sendJson(res, 400, { error: 'limit must be a non-negative integer' });
+        return;
+      }
+      sendJson(res, 200, {
+        name,
+        state,
+        generation: parsedLogs.generation(name),
+        entries: parsedLogs.entries(name, limit),
+      });
       return;
     }
 
@@ -245,7 +275,7 @@ export async function attachWebUi(
     res.flushHeaders();
 
     activeEventStreams.add(res);
-    const detach = streamOrckitEvents(orckit, res, publicUrl);
+    const detach = streamOrckitEvents(orckit, res, publicUrl, parsedLogs);
 
     const cleanup = () => {
       detach();
@@ -258,7 +288,7 @@ export async function attachWebUi(
     // separate /api/state fetch when it reconnects.
     res.write(`event: snapshot\n`);
     res.write(
-      `data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl }))}\n\n`,
+      `data: ${JSON.stringify(buildSnapshot(orckit, { lastErrors, builds, buildErrors, ide, publicUrl, parsedLogs }))}\n\n`,
     );
   }
 

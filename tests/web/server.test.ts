@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import { validateConfig } from '../../src/config/load.js';
 import { attachWebUi, type WebUiServerHandle } from '../../src/web/server.js';
 import { defaultOpenCommand, isUnderRoot } from '../../src/web/open.js';
+import type { FirebaseLogBundle } from '../../src/logs/firebase.js';
+import { trackParsedLogs, type ParsedLogTracker } from '../../src/logs/tracker.js';
+import { startFakeEmulator, type FakeEmulator } from '../logs/fake-emulator.js';
 
 describe('attachWebUi over HTTP', () => {
   let orckit: Orckit;
@@ -391,6 +395,129 @@ describe('attachWebUi /api/open (IDE configured)', () => {
       expect(((await res.json()) as { error: string }).error).toMatch(/couldn't open with/);
     } finally {
       await bogus.dispose();
+    }
+  });
+});
+
+describe('attachWebUi parsed logs', () => {
+  const fixture = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../fixtures/firebase-logging/concurrent-burst-404.jsonl',
+    ),
+    'utf8',
+  )
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as FirebaseLogBundle);
+
+  let fake: FakeEmulator;
+  let orckit: Orckit;
+  let tracker: ParsedLogTracker;
+  let server: WebUiServerHandle;
+
+  beforeEach(async () => {
+    fake = await startFakeEmulator({ history: fixture });
+    const config = validateConfig({
+      project: 'parsed-test',
+      processes: {
+        emulators: { command: 'sleep 1', parsed_logs: { source: 'firebase', hub: fake.hub } },
+        api: { command: 'sleep 1' },
+      },
+    });
+    orckit = new Orckit(config);
+    tracker = trackParsedLogs(orckit, {
+      processes: { emulators: config.processes.emulators!.parsed_logs! },
+      retryMs: 10,
+    });
+    server = await attachWebUi(orckit, { port: 0, parsedLogs: tracker });
+  });
+
+  afterEach(async () => {
+    await server.dispose();
+    tracker.dispose();
+    await orckit.dispose();
+    await fake.close();
+  });
+
+  const getJson = async (path: string) => {
+    const res = await fetch(`${server.url}${path}`);
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+
+  it('GET /api/state describes the log source of processes that have one', async () => {
+    const { body } = await getJson('/api/state');
+    const processes = body.processes as Array<{ name: string; parsedLogs?: unknown }>;
+    expect(processes.find((p) => p.name === 'emulators')!.parsedLogs).toEqual({
+      state: { source: 'firebase', state: 'idle' },
+      generation: 0,
+      count: 0,
+    });
+    expect(processes.find((p) => p.name === 'api')).not.toHaveProperty('parsedLogs');
+  });
+
+  it('GET /api/logs/:name returns the parsed entries once connected', async () => {
+    orckit.emit('process:spawned', 'emulators', 1, 'sleep 1');
+    const expected = 27;
+    await vi.waitFor(
+      async () =>
+        expect((await getJson('/api/logs/emulators')).body.entries).toHaveLength(expected),
+      { timeout: 3000, interval: 10 },
+    );
+    const { body } = await getJson('/api/logs/emulators');
+    expect(body).toMatchObject({
+      name: 'emulators',
+      state: { source: 'firebase', state: 'connected' },
+      generation: 1,
+    });
+    const entries = body.entries as Array<{ id: number; kind: string }>;
+    expect(entries.filter((e) => e.kind === 'execution')).toHaveLength(10);
+
+    const limited = await getJson('/api/logs/emulators?limit=2');
+    expect((limited.body.entries as unknown[]).map((e) => (e as { id: number }).id)).toEqual(
+      entries.slice(-2).map((e) => e.id),
+    );
+  });
+
+  it('GET /api/logs/:name rejects a bad limit and unknown processes', async () => {
+    expect((await getJson('/api/logs/emulators?limit=-1')).status).toBe(400);
+    expect((await getJson('/api/logs/emulators?limit=abc')).status).toBe(400);
+    expect((await getJson('/api/logs/api')).status).toBe(404);
+    expect((await getJson('/api/logs/nope')).status).toBe(404);
+  });
+
+  it('GET /events streams the reset, the replayed entries and state changes', async () => {
+    const res = await fetch(`${server.url}/events`);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const readUntil = async (predicate: (b: string) => boolean) => {
+      while (!predicate(buf)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+    };
+    await readUntil((b) => b.includes('event: snapshot'));
+    expect(buf).toContain('"parsedLogs":{"state":{"source":"firebase","state":"idle"}');
+
+    orckit.emit('process:spawned', 'emulators', 1, 'sleep 1');
+    await readUntil((b) => b.includes('"state":"connected"') && b.includes('"id":26'));
+    expect(buf).toContain('event: parsed:reset\ndata: {"name":"emulators","generation":1}');
+    expect(buf).toContain('event: parsed:state');
+    expect(buf).toMatch(
+      /event: parsed:entries\ndata: \{"name":"emulators","generation":1,"entries":\[/,
+    );
+    await reader.cancel();
+  });
+
+  it('GET /api/logs/:name is a 404 when no tracker is attached', async () => {
+    const bare = await attachWebUi(orckit, { port: 0 });
+    try {
+      const res = await fetch(`${bare.url}/api/logs/emulators`);
+      expect(res.status).toBe(404);
+    } finally {
+      await bare.dispose();
     }
   });
 });

@@ -65,3 +65,29 @@ describe('loadConfig', () => {
     expect(() => loadConfig(join(dir, 'missing.yaml'))).toThrow(/missing.yaml/);
   });
 });
+
+describe('validateConfig — parsed_logs', () => {
+  it('starts the Firebase logging emulator for a firebase source', () => {
+    const config = validateConfig({
+      processes: {
+        emulators: { command: 'pnpm emulators', parsed_logs: { source: 'firebase' } },
+        api: { command: 'node api.js' },
+      },
+    });
+    expect(config.processes.emulators?.env).toEqual({ START_LOGGING_EMULATOR: 'true' });
+    expect(config.processes.api?.env).toEqual({});
+  });
+
+  it.each(['false', 'true'])('keeps an explicit START_LOGGING_EMULATOR=%s', (value) => {
+    const config = validateConfig({
+      processes: {
+        emulators: {
+          command: 'pnpm emulators',
+          env: { START_LOGGING_EMULATOR: value, OTHER: '1' },
+          parsed_logs: { source: 'firebase' },
+        },
+      },
+    });
+    expect(config.processes.emulators?.env).toEqual({ START_LOGGING_EMULATOR: value, OTHER: '1' });
+  });
+});

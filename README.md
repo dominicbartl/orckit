@@ -370,6 +370,13 @@ processes:
           color: red
 
     buffer_size: 1000   # in-memory output lines kept per process; default 1000
+
+    parsed_logs:        # optional; see "Parsed Firebase emulator logs"
+      source: firebase          # required; the only source today
+      hub: 127.0.0.1:4400       # default. The Emulator Hub (`emulators.hub` in
+                                #   firebase.json), asked where the logging
+                                #   emulator listens
+      buffer_size: 5000         # parsed entries kept; default 5000
 ```
 
 ### Process URLs
@@ -447,6 +454,28 @@ Set `logs.enabled: true` at the top level of `orckit.yaml` to write each process
 `stdout` lines are prefixed with two spaces; `stderr` with `! `. `output.suppress` / `include` filters apply (matched-out lines are not written). The CLI reporter still runs as normal — log files are additive. Add `.orckit/` to your `.gitignore` if you store the logs in the repo.
 
 Programmatically: `attachLogReporter(orckit, { dir })` returns a handle with a `dispose()` you must call during teardown.
+
+## Parsed Firebase emulator logs
+
+Give the process that runs `firebase emulators:start` a `parsed_logs` block and orckit reads the Firebase **logging emulator** alongside the raw stdout. It turns the stream into structured entries:
+
+- **one entry per function execution**: function name and duration (from the `Finished "…" in …ms` line)
+- **one entry per `console.log` call**: the emulator sends every stdout line separately, so a logged object arrives as many lines; orckit merges them back and parses the object (`util.inspect` output or JSON) into a tree. Each entry carries its function, level, message, the parsed value, the stack split off an error, a `Controller.method` handler (from `controller`/`handler` fields or a leading `Foo.bar` token), and the NestJS logger's context and pid where present. firebase-functions `logger` lines map their `severity` to the level.
+- **emulator system lines**: start-up, warnings, load errors
+
+```yaml
+processes:
+  emulators:
+    command: firebase emulators:start --project demo-local
+    parsed_logs:
+      source: firebase
+```
+
+orckit connects while the process runs, finds the logging emulator through the Emulator Hub (`GET /emulators`, port 4400 unless `emulators.hub` in `firebase.json` says otherwise), and reconnects if the emulators restart. firebase-tools only starts the logging emulator together with the Emulator UI or when `START_LOGGING_EMULATOR=true`, so orckit adds `START_LOGGING_EMULATOR=true` to the process's `env` unless you set it there yourself. The raw stdout capture is unchanged.
+
+The entries are served by the web dashboard's HTTP API: `GET /api/logs/<name>?limit=N` returns the newest entries, and the `/events` stream carries `parsed:entries`, `parsed:reset` and `parsed:state` events. Every reconnect replays the emulator's whole history, so it starts a new `generation`: entry ids restart at 0 and a client drops whatever it held when `parsed:reset` arrives.
+
+Firebase doesn't tag log lines with an execution id, so entries are never grouped under the execution that produced them: concurrent calls of one function interleave in no fixed order.
 
 ## MCP server
 

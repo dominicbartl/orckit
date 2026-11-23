@@ -1,0 +1,19 @@
+{
+  "name": "functions",
+  "private": true,
+  "packageManager": "pnpm@10.25.0",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^7.0.0"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@firebase/util",
+      "protobufjs"
+    ]
+  }
+}

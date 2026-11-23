@@ -82,11 +82,11 @@ Read from firebase-tools 15.32.1 (the version linden pins), not assumed:
    attribution would be a guess that sounds certain. The timeline is flat:
    execution rows and entries in arrival order, which already puts them next to
    each other. If exact grouping matters later, the app can log a request id
-   and we add `logs.correlate_by: requestId`.
+   and we add `parsed_logs.correlate_by: requestId`.
 
 ## 2. UX: the "Parsed" tab
 
-The tab appears in the process detail only for processes with a `logs:` block.
+The tab appears in the process detail only for processes with a `parsed_logs:` block.
 
 ```
 [ Logs ] [ Parsed ● ] [ Errors ] [ Details ]
@@ -143,7 +143,7 @@ orchestrator does not change.**
 | `src/logs/inspect-parse.ts` | Pure, lenient parser that turns `util.inspect` *or* JSON text into a `LogValue` tree (§3.1). Returns `null` when it can't parse, and the entry stays text. |
 | `src/logs/firebase.ts` | Pure reducer from a bundle plus assembler state to `LogEntry` output: execution rows, merged user entries, system entries, handler extraction. Owns the wire types. |
 | `src/logs/firebase-source.ts` | Finds the logging emulator through the hub, runs the WebSocket client and reconnects with backoff. Signals **reset** on every (re)connect, because Firebase replays history. |
-| `src/logs/tracker.ts` | `trackStructuredLogs(orckit)`. For each process with `logs:`, it opens the source on `process:ready` and closes it on `stopping` / `stopped` / `restarting`. Keeps a per-process ring buffer, emits `entry` / `reset` / `status`, and exposes `query(name, filter)`. |
+| `src/logs/tracker.ts` | `trackParsedLogs(orckit, { processes })`. For each process with a source, it opens it on `process:spawned` and closes it on `stopping` / `stopped` / `failed` / `finished`. Keeps a per-process ring buffer and emits batched `entries`, `reset` and `state` events to subscribers. Filtering (`query`) is left to the MCP tool in step 6. |
 
 Unlike `trackBuilds`, the tracker owns a socket, so it is **created once in
 `cli.ts`** and handed to both `attachWebUi` and `attachMcpServer` rather than
@@ -166,23 +166,47 @@ tagged nodes, not strings, so the tree can style them.
 ```yaml
 emulators:
   command: pnpm emulators
-  logs:
+  parsed_logs:
     source: firebase        # discriminated union; room for `json-lines` later
-    hub: localhost:4400     # default; where the logging emulator is discovered
+    hub: 127.0.0.1:4400     # default; where the logging emulator is discovered
     buffer_size: 5000       # entries kept per process (newest win on replay)
 ```
 
-At config load, a process with `logs.source: firebase` gets
+The field is `parsed_logs:`, not `logs:`, because a top-level `logs:` block
+already exists for per-process `.log` files. Step 3 defines `parsedLogsSchema`
+but does not attach it to `processConfigSchema` yet. Attaching it is public
+surface (README, AGENTS.md, an example), and documenting a field with no UI
+behind it would ship a dead option. Step 4 attaches it.
+
+At config load, a process with `parsed_logs.source: firebase` gets
 `START_LOGGING_EMULATOR=true` merged into its `env` unless it is already set.
 The tab then works even with the Emulator UI disabled.
 
 ### 3.3 Wire format (web server)
 
-- `ProcessSnapshot.logs?: { source: 'firebase'; status: 'connecting' | 'connected' | 'unavailable'; detail?: string; count: number }`
-- `GET /api/logs/:name?limit=` returns entries for hydration. They are kept out
-  of the snapshot because they are large.
-- SSE `log:entry`, `log:reset`, `log:status`
-- Mirror types in `packages/web-ui/src/lib/types.ts`
+As built in step 4:
+
+- `ProcessSnapshot.parsedLogs?: { state: ParsedLogState; generation: number; count: number }`,
+  present only for processes with `parsed_logs`. `state` is
+  `{ source: 'firebase', state: 'idle' | 'connecting' | 'connected' | 'waiting' | 'unavailable', url? | detail? }`.
+- `GET /api/logs/:name?limit=N` returns
+  `{ name, state, generation, entries }`. It answers 404 for a process
+  without a source and 400 for a bad `limit`. Entries are kept out of the
+  snapshot because they are large.
+- SSE events:
+  - `parsed:entries`: `{ name, generation, entries }`, batched in a 16 ms
+    window, so a whole replay is a handful of messages
+  - `parsed:reset`: `{ name, generation }`
+  - `parsed:state`: `{ name, state }`
+- **Client contract for step 5:** hydrate from `/api/logs`, then apply SSE.
+  Drop any `parsed:entries` whose generation differs from the one held. On
+  `parsed:reset`, clear and adopt the new generation. Within a generation,
+  ids increase, so skip streamed entries with `id` at or below the last
+  fetched one (they overlap when the SSE stream is ahead of the fetch).
+- In-flight counts are not on the wire. They change on every `Beginning`
+  line, which produces no entry. Step 5 decides whether the header indicator
+  is worth an extra event.
+- Mirror types go in `packages/web-ui/src/lib/types.ts` (step 5).
 
 ### 3.4 Frontend (`packages/web-ui/`)
 
@@ -258,14 +282,65 @@ a **devDependency** for the fake logging-emulator server in tests.
    **Contract for step 3:** the tracker must call `flush()` once the socket has
    been quiet for `MERGE_GAP_MS`. Otherwise the last log line waits for the next
    bundle.
-3. Schema, `firebase-source.ts` and `tracker.ts`, plus tests against a fake hub
-   and WebSocket server: discovery, reconnect → reset (a fresh assembler per
-   connection), quiet-period `flush()`, close on process stop, ring-buffer cap.
-4. Web server wiring (snapshot field, `/api/logs/:name`, SSE events) plus
-   tests.
+3. ~~Schema, `firebase-source.ts` and `tracker.ts`.~~ **Done**, except
+   attaching the schema (moved to step 4, see §3.2).
+   - **Source:** `connectFirebaseLogs({ hub, onConnect, onBundle, onState })`
+     has four states:
+     - `connecting`
+     - `connected`
+     - `waiting`: hub or socket not up yet, which is normal during boot
+     - `unavailable`: the hub is up with no logging emulator, and the state
+       carries the `START_LOGGING_EMULATOR` hint
+
+     It backs off from 500 ms to 5 s and resolves a wildcard bind address to
+     the hub's host.
+   - **Tracker:** `trackParsedLogs(host, { processes })` takes
+     `ParsedLogsHost`, a structural slice of `Orckit` that the real class
+     satisfies.
+     - It opens the source on `process:spawned` and closes it on
+       stopping/stopped/failed/finished, flushing held-back entries on close.
+     - On every connect it delivers pending entries, then resets: a fresh
+       assembler, an emptied buffer and a `reset` event.
+     - It flushes after 50 ms of quiet and trims the buffer in chunks.
+     - It batches entries to subscribers in a 16 ms window, and a throwing
+       subscriber can't break the socket callback. Batching per tick didn't
+       work: every WebSocket message is its own macrotask, so a real replay of
+       about 4,800 entries went out in 1,252 batches. With the window it's 4.
+   - **Tests:** they run against a fake hub plus a `ws` server that replays
+     history, using `ws` as a dev dependency only. 23 tests, stable over 30
+     repeat runs under CPU load. Over the WebSocket, the tracker produces
+     exactly what the assembler alone makes of the burst fixture.
+   - **Smoke test against the real emulator:** it connected and replayed into
+     4,786 entries (3,302 executions, 903 logs, 581 system lines). The newest
+     entry was a live request log with its handler and fields parsed.
+4. ~~Attach `parsed_logs:` and wire the web server.~~ **Done.**
+   - **Config:** `parsed_logs` is a process field. `validateConfig` adds
+     `START_LOGGING_EMULATOR=true` to a firebase process's `env` unless the
+     `env` sets it either way.
+   - **CLI:** `cli.ts` creates one `trackParsedLogs` when the web dashboard
+     runs and some process has `parsed_logs`. It disposes the tracker on
+     shutdown, and also right away if the web server fails to bind. Step 6
+     adds MCP as a second reason to create it.
+   - **Web:** wire format as in §3.3. The tracker gained a `generation`
+     counter (one per connection) because entry ids restart at 0 after every
+     reset.
+   - **Docs:** README (config line plus a "Parsed Firebase emulator logs"
+     section), AGENTS.md (decision section plus checklist item 14), and
+     `examples/14-firebase-parsed-logs`. The example is a runnable
+     functions-only emulator on a `demo-` project, with no Java and no login,
+     plus a traffic loop.
+   - **Verified end to end with that example:**
+     - snapshot `connected`, generation 1
+     - `/api/logs` served 67 entries: a 9-line `console.log` merged with its
+       handler, a structured `logger` line, a thrown error with its stack
+       split off, and executions
+     - SIGINT exited in 2 s with no listeners or emulator processes left
+   - **Commit together with step 5.** `parsed_logs` is documented as feeding
+     the dashboard's API. The visible Parsed tab only comes in step 5, so
+     release them together.
 5. Frontend components, sink fixtures and the Parsed tab.
 6. The `get_function_logs` MCP tool plus tests.
-7. Docs: README (`logs:` config reference, MCP section, events), AGENTS.md,
+7. Docs: README (`parsed_logs:` config reference, MCP section, events), AGENTS.md,
    a Firebase example in `examples/`, and `engines`.
 8. **End-to-end on linden:** use the filters and expand entries, restart the
    emulators from the UI (the tab resets and refills, with no duplicates), stop

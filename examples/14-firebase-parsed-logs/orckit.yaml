@@ -1,0 +1,36 @@
+project: firebase-parsed-logs
+
+# The Firebase Functions emulator with `parsed_logs`: orckit reads the logging
+# emulator next to the raw stdout and serves one entry per function execution
+# and per console.log call (objects parsed), at GET /api/logs/emulators on the
+# web dashboard. Ports are moved off the Firebase defaults (hub 4471, functions
+# 5171) so this runs next to another project's emulators; `hub` follows them.
+#
+# Functions-only needs no Java and no Firebase login (`demo-` project ids run
+# fully offline). The first run installs firebase-tools via pre_start.
+
+processes:
+  emulators:
+    command: pnpm exec firebase emulators:start --only functions --project demo-orckit
+    cwd: ./examples/14-firebase-parsed-logs
+    hooks:
+      pre_start: pnpm install --ignore-workspace --silent && pnpm --dir functions install --ignore-workspace --silent
+    hook_timeout_ms: 600000
+    parsed_logs:
+      source: firebase
+      hub: 127.0.0.1:4471     # emulators.hub.port in firebase.json
+    ready:
+      type: log-pattern
+      pattern: 'All emulators ready'
+      timeout_ms: 120000
+    # firebase emulators:start stops its emulators one by one; give it time.
+    stop_grace_ms: 30000
+
+  # Calls the functions once a second so there is something to read.
+  traffic:
+    depends_on: [emulators]
+    command: >-
+      i=0; while true; do i=$((i+1));
+      curl -s -o /dev/null "http://127.0.0.1:5171/demo-orckit/europe-west1/orders?id=o_$i";
+      curl -s -o /dev/null "http://127.0.0.1:5171/demo-orckit/europe-west1/health";
+      sleep 1; done

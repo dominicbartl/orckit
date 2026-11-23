@@ -435,3 +435,32 @@ describe('orckitConfigSchema', () => {
     expect(parsed.preflight).toHaveLength(1);
   });
 });
+
+describe('parsed_logs', () => {
+  it('fills in the hub and buffer size for a firebase source', () => {
+    const parsed = processConfigSchema.parse({
+      command: 'pnpm emulators',
+      parsed_logs: { source: 'firebase' },
+    });
+    expect(parsed.parsed_logs).toEqual({
+      source: 'firebase',
+      hub: '127.0.0.1:4400',
+      buffer_size: 5000,
+    });
+  });
+
+  it('is absent unless configured', () => {
+    expect(processConfigSchema.parse({ command: 'x' }).parsed_logs).toBeUndefined();
+  });
+
+  it.each([
+    ['an unknown source', { source: 'loki' }],
+    ['a missing source', { hub: '127.0.0.1:4400' }],
+    ['an empty hub', { source: 'firebase', hub: '' }],
+    ['a zero buffer', { source: 'firebase', buffer_size: 0 }],
+  ])('rejects %s', (_label, parsedLogs) => {
+    expect(processConfigSchema.safeParse({ command: 'x', parsed_logs: parsedLogs }).success).toBe(
+      false,
+    );
+  });
+});

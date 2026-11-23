@@ -106,6 +106,25 @@ function isValidRegex(source: string): boolean {
 
 const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
+const firebaseParsedLogsSchema = z.object({
+  source: z.literal('firebase'),
+  /**
+   * `host:port` of the Firebase Emulator Hub (`emulators.hub` in
+   * firebase.json). orckit asks it where the logging emulator listens.
+   */
+  hub: z.string().min(1).default('127.0.0.1:4400'),
+  /** Parsed entries kept per process; the oldest drop first. */
+  buffer_size: z.number().int().positive().default(5000),
+});
+
+/**
+ * A structured log source read alongside the process's stdout, parsed into
+ * entries for the web dashboard (`GET /api/logs/:name`). `firebase` reads the
+ * Firebase logging emulator: one row per function execution, `console.log`
+ * calls re-merged with their objects parsed, and emulator system lines.
+ */
+export const parsedLogsSchema = z.discriminatedUnion('source', [firebaseParsedLogsSchema]);
+
 export const processConfigSchema = z
   .object({
     category: z.string().default('default'),
@@ -212,6 +231,13 @@ export const processConfigSchema = z
      * ports you know are yours. Default false.
      */
     kill_orphan_ports: z.boolean().default(false),
+    /**
+     * Read this process's logs from a structured source as well as stdout —
+     * today the Firebase logging emulator (`source: firebase`). orckit connects
+     * while the process runs and keeps the newest `buffer_size` parsed
+     * entries. The raw stdout capture is unaffected.
+     */
+    parsed_logs: parsedLogsSchema.optional(),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'docker' && !data.container_name) {
@@ -444,6 +470,7 @@ export type RestartPolicy = z.infer<typeof restartPolicySchema>;
 export type ProcessType = z.infer<typeof processTypeSchema>;
 export type ProcessUrl = z.infer<typeof processUrlSchema>;
 export type PreflightCheck = z.infer<typeof preflightCheckSchema>;
+export type ParsedLogsConfig = z.infer<typeof parsedLogsSchema>;
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type WebConfig = z.infer<typeof webConfigSchema>;

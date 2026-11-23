@@ -1,0 +1,9 @@
+{
+  "name": "firebase-parsed-logs",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.25.0",
+  "devDependencies": {
+    "firebase-tools": "^15.0.0"
+  }
+}

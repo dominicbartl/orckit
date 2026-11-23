@@ -221,6 +221,22 @@ Each process gets its own file. Sessions within a file are separated by a banner
 
 Do **not** enable it just because you can — for short-lived dev sessions, the in-memory `buffer_size` is usually enough and avoids leftover files. Enable when sessions are long, processes are flaky, or the user has asked for persistent logs.
 
+## `parsed_logs` — structured Firebase emulator logs
+
+Add it to the process that runs `firebase emulators:start` (directly or through a `pnpm`/script wrapper) when the user wants function logs they can filter and read: one entry per execution, `console.log` objects parsed back into trees, the function each line came from.
+
+```yaml
+emulators:
+  command: pnpm emulators
+  parsed_logs:
+    source: firebase
+    # hub: 127.0.0.1:4400   # only if firebase.json moves emulators.hub
+```
+
+- orckit adds `START_LOGGING_EMULATOR=true` to the process env, so it works with the Emulator UI disabled. Don't add it yourself; only set it to `false` if the user explicitly wants the logging emulator off (then `parsed_logs` reports it unavailable).
+- Only one process per emulator suite needs it — the one whose command starts the emulators, not the processes that call the functions.
+- It does not replace the raw output: stdout is captured as always.
+
 ## `ide` (top-level, optional)
 
 On by default; you rarely need to touch it. When a `.idea` folder exists at or above the config, the web dashboard turns file references in logs/errors (`src/app.ts:42:10`) into clickable links. Clicking POSTs to orckit's `/api/open`, which makes the path absolute against the process's `cwd` and then routes: files **inside the project root** (the `.idea` dir) open in the IDE via its command-line launcher (`<command> --line N --column C <abs-file>`); files **outside it** (temp files, generated artifacts) open in the OS default app; missing files error. No Toolbox, no plugin. No `.idea` → no links; never affects orchestration or the terminal UI.
@@ -281,6 +297,7 @@ When you run `orc start` yourself in a worktree that has `sandbox:` (or in the m
 11. No secrets in `env`.
 12. With a `sandbox:` block: every git-ignored file a process reads is in `copy_files`, and every non-Node tool a process or hook calls (`java`, `stripe`, `gcloud`, …) is installed by `sandbox.dockerfile`.
 13. `url:` is only set where detection can't find it (Angular/Vite/Next/Firebase print theirs), and a static `url:` starts with `http://` or `https://` — validation rejects anything else. Write `localhost`, not a sandbox domain.
+14. `parsed_logs: { source: firebase }` sits on the process that starts the Firebase emulators, and only there; its `env` doesn't set `START_LOGGING_EMULATOR` unless the user asked.
 
 ## Programmatic API
 

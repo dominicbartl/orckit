@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import type { Orckit, OrckitEvents } from '../orchestrator/orchestrator.js';
 import { reduceBuild } from '../process/parsers.js';
+import type { ParsedLogTracker } from '../logs/tracker.js';
 
 /**
  * Push every relevant orckit event to a single SSE client. Returns a
@@ -16,6 +17,7 @@ export function streamOrckitEvents(
   orckit: Orckit,
   res: ServerResponse,
   publicUrl: (url: string) => string = (url) => url,
+  parsedLogs: ParsedLogTracker | null = null,
 ): () => void {
   const send = (event: string, data: unknown) => {
     if (res.writableEnded) return;
@@ -70,8 +72,25 @@ export function streamOrckitEvents(
   on('boot:complete', (summary) => send('boot:complete', summary));
   on('all:ready', (names) => send('all:ready', { names }));
 
+  // Parsed log sources: entries arrive batched (a replay is a few large
+  // messages), and `generation` lets the client drop stale ones after a reset.
+  const unsubscribeParsed = parsedLogs?.subscribe((event) => {
+    if (event.type === 'entries') {
+      send('parsed:entries', {
+        name: event.name,
+        generation: event.generation,
+        entries: event.entries,
+      });
+    } else if (event.type === 'reset') {
+      send('parsed:reset', { name: event.name, generation: event.generation });
+    } else {
+      send('parsed:state', { name: event.name, state: event.state });
+    }
+  });
+
   return () => {
     clearInterval(heartbeat);
+    unsubscribeParsed?.();
     for (const [name, handler] of listeners) orckit.off(name, handler);
   };
 }

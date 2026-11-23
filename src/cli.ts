@@ -30,6 +30,7 @@ import { attachShutdownReporter } from './reporter/shutdown-reporter.js';
 import { attachLogReporter, type LogReporterHandle } from './reporter/log-reporter.js';
 import { attachMcpServer, type McpServerHandle } from './mcp/server.js';
 import { attachWebUi, type WebUiServerHandle } from './web/server.js';
+import { trackParsedLogs, type ParsedLogTracker } from './logs/tracker.js';
 import { detectIde } from './web/ide.js';
 import { attachRepl, type Repl } from './reporter/repl.js';
 import { renderGraph } from './reporter/graph-view.js';
@@ -312,6 +313,9 @@ program
         fail(new Error(`--web-port must be a number, got "${opts.webPort}"`));
       }
       let webServer: WebUiServerHandle | null = null;
+      // Parsed log sources hold sockets to the emulators, so there is one
+      // tracker per `orc start`, created only when something reads it.
+      let parsedLogs: ParsedLogTracker | null = null;
       if (cliWebPort != null && !config.web.enabled) {
         console.warn(
           chalk.yellow(
@@ -328,6 +332,14 @@ program
           : config.ide.enabled
             ? detectIde(dirname(configPath), { command: config.ide.command })
             : null;
+        const parsedLogSources = Object.fromEntries(
+          Object.entries(config.processes).flatMap(([name, p]) =>
+            p.parsed_logs ? [[name, p.parsed_logs] as const] : [],
+          ),
+        );
+        if (Object.keys(parsedLogSources).length > 0) {
+          parsedLogs = trackParsedLogs(orckit, { processes: parsedLogSources });
+        }
         try {
           webServer = await attachWebUi(orckit, {
             port: cliWebPort ?? config.web.port,
@@ -335,11 +347,14 @@ program
             ide,
             openRelay: process.env.ORCKIT_OPEN_RELAY,
             publicUrl: processUrl,
+            parsedLogs,
           });
           // Web dashboard is the headline action surface — show it first.
           links.unshift({ label: 'web', value: publicUrl(webServer.url) });
           if (ide) links.push({ label: 'ide', value: `file links open via \`${ide.command}\`` });
         } catch (err) {
+          parsedLogs?.dispose();
+          parsedLogs = null;
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
           console.error(
             chalk.dim(
@@ -446,6 +461,7 @@ program
           await logReporter?.dispose().catch(() => {});
           await mcpServer?.dispose().catch(() => {});
           await webServer?.dispose().catch(() => {});
+          parsedLogs?.dispose();
           console.log(renderStatus(orckit.states()));
           process.exit(code);
         })();

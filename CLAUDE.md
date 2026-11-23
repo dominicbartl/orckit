@@ -80,6 +80,13 @@ src/
                       # execution / log / system entries. Re-merges the
                       # one-bundle-per-stdout-line split, emits in start order
                       # (holds back behind open entries); flush() on quiet.
+    firebase-source.ts # connectFirebaseLogs — hub discovery (GET /emulators)
+                      # + logging-emulator WebSocket, reconnect with backoff.
+                      # Every connect replays the full history → caller resets.
+    tracker.ts        # trackParsedLogs — one per `orc start` (owns sockets):
+                      # opens a source per process on spawn, closes on stop,
+                      # quiet-period flush, ring buffer, batched subscriber
+                      # events (entries / reset / state).
 
   mcp/
     server.ts         # attachMcpServer — Streamable HTTP MCP listener that
@@ -269,6 +276,7 @@ Anything that needs a richer view than `inspect(name)` / `states()` / `output(na
 
 - **the SPA shell** (`packages/web-ui/dist/*`) — built artifacts copied into `dist/web/static/` at package-build time
 - **`GET /api/state` + `GET /api/output/:name`** — initial-hydration snapshots over JSON
+- **`GET /api/logs/:name?limit=`** — parsed log entries for a process with `parsed_logs` (from the shared `trackParsedLogs` tracker the CLI creates and passes in; the snapshot carries each source's `state` / `generation` / `count`, and `/events` relays `parsed:entries` / `parsed:reset` / `parsed:state`)
 - **`GET /events`** — SSE stream of orckit events, beginning with a full snapshot for reconnect tolerance
 - **`POST /api/restart/:name` + `POST /api/stop/:name`** — action endpoints calling `orckit.restart()` / `orckit.stop()` directly
 - **`POST /api/open?file=&line=&column=`** — opens a file: under the project root via the configured IDE launcher (`ide.command`), outside it via the OS default app; 404s a non-existent file. Only meaningful when an `ide` was detected
