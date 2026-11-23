@@ -13,6 +13,7 @@ import {
   findBlockedPorts,
   isContainerProxy,
   type BlockedPort,
+  type OrckitServerPorts,
 } from './util/blocked-ports.js';
 import { freePort } from './util/port.js';
 import { ORCKIT_VERSION } from './util/version.js';
@@ -257,12 +258,30 @@ program
           : Object.entries(config.processes)
               .filter(([, p]) => !p.optional)
               .map(([n]) => n);
+      // orckit's own servers as this run binds them — CLI flag > YAML >
+      // default. Resolved once so the port check and the servers agree, and
+      // before anything with side effects so a bad flag fails cleanly.
+      const cliMcpEnabled = opts.mcp !== false;
+      const cliMcpPort = opts.mcpPort != null ? Number(opts.mcpPort) : undefined;
+      if (cliMcpPort != null && Number.isNaN(cliMcpPort)) {
+        fail(new Error(`--mcp-port must be a number, got "${opts.mcpPort}"`));
+      }
+      const cliWebEnabled = opts.web !== false;
+      const cliWebPort = opts.webPort != null ? Number(opts.webPort) : undefined;
+      if (cliWebPort != null && Number.isNaN(cliWebPort)) {
+        fail(new Error(`--web-port must be a number, got "${opts.webPort}"`));
+      }
+      const servers: OrckitServerPorts = {
+        mcp: cliMcpEnabled && config.mcp.enabled ? (cliMcpPort ?? config.mcp.port) : null,
+        web: cliWebEnabled && config.web.enabled ? (cliWebPort ?? config.web.port) : null,
+      };
+
       // A previous `orc start` that was SIGKILLed (force quit, OOM) had no
       // chance to run any teardown — its detached process groups are still
       // out there. The session file it left behind is how we find them.
       const stateDir = dirname(configPath) + '/.orckit';
       await reapPreviousSession(stateDir, blockedPortMode);
-      await resolveBlockedPorts(config, requiredNames, blockedPortMode);
+      await resolveBlockedPorts(config, requiredNames, blockedPortMode, servers);
 
       // Links collected here flow into the dashboard header so they live
       // inside the persistent live region instead of scrolling away as
@@ -277,11 +296,6 @@ program
         links.push({ label: 'logs', value: logReporter.dir });
       }
 
-      const cliMcpEnabled = opts.mcp !== false;
-      const cliMcpPort = opts.mcpPort != null ? Number(opts.mcpPort) : undefined;
-      if (cliMcpPort != null && Number.isNaN(cliMcpPort)) {
-        fail(new Error(`--mcp-port must be a number, got "${opts.mcpPort}"`));
-      }
       let mcpServer: McpServerHandle | null = null;
       if (cliMcpPort != null && !config.mcp.enabled) {
         console.warn(
@@ -289,10 +303,10 @@ program
             '  --mcp-port was given but mcp.enabled is false in config; not starting MCP server',
           ),
         );
-      } else if (cliMcpEnabled && config.mcp.enabled) {
+      } else if (servers.mcp !== null) {
         try {
           mcpServer = await attachMcpServer(orckit, {
-            port: cliMcpPort ?? config.mcp.port,
+            port: servers.mcp,
             host: config.mcp.host,
             publicUrl: processUrl,
           });
@@ -307,11 +321,6 @@ program
         }
       }
 
-      const cliWebEnabled = opts.web !== false;
-      const cliWebPort = opts.webPort != null ? Number(opts.webPort) : undefined;
-      if (cliWebPort != null && Number.isNaN(cliWebPort)) {
-        fail(new Error(`--web-port must be a number, got "${opts.webPort}"`));
-      }
       let webServer: WebUiServerHandle | null = null;
       // Parsed log sources hold sockets to the emulators, so there is one
       // tracker per `orc start`, created only when something reads it.
@@ -322,7 +331,7 @@ program
             '  --web-port was given but web.enabled is false in config; not starting web dashboard',
           ),
         );
-      } else if (cliWebEnabled && config.web.enabled) {
+      } else if (servers.web !== null) {
         // Detect a JetBrains project so the dashboard can deep-link file
         // references in logs/errors. Search from the config file's directory.
         // In a sandbox the Mac-side `orc start` detected the IDE (the `.idea`
@@ -342,7 +351,7 @@ program
         }
         try {
           webServer = await attachWebUi(orckit, {
-            port: cliWebPort ?? config.web.port,
+            port: servers.web,
             host: config.web.host,
             ide,
             openRelay: process.env.ORCKIT_OPEN_RELAY,
@@ -584,6 +593,7 @@ async function resolveBlockedPorts(
   config: OrckitConfig,
   names: string[],
   mode: 'ask' | 'kill' | 'fail',
+  servers: OrckitServerPorts,
 ): Promise<void> {
   // Leftover containers of `type: docker` processes first: their published
   // ports show up as held by the container platform's VM proxy, which must
@@ -594,7 +604,7 @@ async function resolveBlockedPorts(
     if (processConfig) await removeDockerContainer(processConfig);
   }
 
-  const expected = collectExpectedPorts(config, names);
+  const expected = collectExpectedPorts(config, names, servers);
   let blocked = await findBlockedPorts(expected);
   // A container platform tears its port forwards down asynchronously: right
   // after `docker rm -f` the proxy can still be listening for a moment. Give

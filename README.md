@@ -627,6 +627,8 @@ console.log(orckit.states());  // Map<name, ProcessState>
 await orckit.dispose();        // stop everything in reverse dependency order
 ```
 
+The pre-boot port check is exported as well: `collectExpectedPorts(config, names, servers?)` lists the ports a boot needs and `findBlockedPorts` finds their current holders. Pass the MCP/web ports your run actually binds as `servers` (`{ mcp, web }`, `null` for one that is off); it defaults to `configServerPorts(config)`, the YAML values.
+
 ### Events
 
 | Event | Payload |

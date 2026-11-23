@@ -72,10 +72,12 @@ export {
 } from './util/port.js';
 export {
   collectExpectedPorts,
+  configServerPorts,
   findBlockedPorts,
   isContainerProxy,
   type ExpectedPort,
   type BlockedPort,
+  type OrckitServerPorts,
 } from './util/blocked-ports.js';
 
 export {

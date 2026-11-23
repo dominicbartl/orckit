@@ -28,12 +28,32 @@ export interface ExpectedPort {
 }
 
 /**
+ * The ports orckit's own MCP and web servers will bind this run, or null when
+ * one won't run. The CLI derives them from its flags over the config
+ * (`--no-mcp`, `--mcp-port`, `--no-web`, `--web-port`).
+ */
+export interface OrckitServerPorts {
+  mcp: number | null;
+  web: number | null;
+}
+
+/** The servers as the config alone describes them. */
+export function configServerPorts(config: OrckitConfig): OrckitServerPorts {
+  return {
+    mcp: config.mcp.enabled ? config.mcp.port : null,
+    web: config.web.enabled ? config.web.port : null,
+  };
+}
+
+/**
  * All ports the boot of `names` is expected to bind, de-duplicated (first
- * source wins). Pure — consults only the config.
+ * source wins). Pure — consults only its arguments; `servers` defaults to the
+ * config's `mcp` / `web` blocks.
  */
 export function collectExpectedPorts(
   config: OrckitConfig,
   names: Iterable<string>,
+  servers: OrckitServerPorts = configServerPorts(config),
 ): ExpectedPort[] {
   const seen = new Set<number>();
   const out: ExpectedPort[] = [];
@@ -49,8 +69,8 @@ export function collectExpectedPorts(
     if (endpoint) add(endpoint.port, name, 'ready-check', true);
     for (const port of processConfig.ports) add(port, name, 'ports', true);
   }
-  if (config.mcp.enabled) add(config.mcp.port, 'orckit', 'mcp', false);
-  if (config.web.enabled) add(config.web.port, 'orckit', 'web', false);
+  if (servers.mcp !== null) add(servers.mcp, 'orckit', 'mcp', false);
+  if (servers.web !== null) add(servers.web, 'orckit', 'web', false);
   return out;
 }
 

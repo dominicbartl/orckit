@@ -321,6 +321,8 @@ import { transition } from '@orckit/cli';
 const next = transition('starting', { kind: 'ready' });  // -> 'ready'
 ```
 
+The pre-boot port check is exported too (`collectExpectedPorts`, `findBlockedPorts`, `configServerPorts`). When you call `collectExpectedPorts` yourself, pass the MCP/web ports your run really binds as its third argument; the default is the YAML values.
+
 Full event list and CLI flag reference: [README.md](README.md).
 
 ## Querying a running orckit

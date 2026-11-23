@@ -5,6 +5,7 @@ import { validateConfig } from '../../src/config/load.js';
 import type { OrckitConfig } from '../../src/config/schema.js';
 import {
   collectExpectedPorts,
+  configServerPorts,
   findBlockedPorts,
   isContainerProxy,
 } from '../../src/util/blocked-ports.js';
@@ -159,6 +160,34 @@ describe('collectExpectedPorts', () => {
     expect(byPort.get(4000)).toBe(true);
     expect(byPort.get(7676)).toBe(false);
     expect(byPort.get(7677)).toBe(false);
+  });
+
+  describe('with the servers this run actually binds (CLI flags applied)', () => {
+    const config = validateConfig({ project: 'test', processes: { a: { command: 'x' } } });
+
+    it('defaults to the config’s mcp / web blocks', () => {
+      expect(configServerPorts(config)).toEqual({ mcp: 7676, web: 7677 });
+      expect(collectExpectedPorts(config, ['a'])).toEqual(
+        collectExpectedPorts(config, ['a'], configServerPorts(config)),
+      );
+    });
+
+    it('skips a server disabled by flag (`--no-mcp`)', () => {
+      expect(collectExpectedPorts(config, ['a'], { mcp: null, web: 7677 })).toEqual([
+        { port: 7677, owner: 'orckit', source: 'web', required: false },
+      ]);
+    });
+
+    it('checks an overridden port instead of the config’s (`--web-port 7699`)', () => {
+      expect(collectExpectedPorts(config, ['a'], { mcp: 7676, web: 7699 })).toEqual([
+        { port: 7676, owner: 'orckit', source: 'mcp', required: false },
+        { port: 7699, owner: 'orckit', source: 'web', required: false },
+      ]);
+    });
+
+    it('expects nothing of orckit’s own when both are off', () => {
+      expect(collectExpectedPorts(config, ['a'], { mcp: null, web: null })).toEqual([]);
+    });
   });
 });
 
