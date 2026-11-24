@@ -1,4 +1,4 @@
-import type { OrckitSnapshot, OutputLine } from './types';
+import type { OrckitSnapshot, OutputLine, ParsedLogEntry, ParsedLogState } from './types';
 
 /**
  * REST + SSE client for the orckit web server.
@@ -19,6 +19,19 @@ export async function fetchOutput(name: string): Promise<OutputLine[]> {
   if (!res.ok) throw new Error(`GET /api/output/${name} failed: ${res.status}`);
   const body = (await res.json()) as { lines: OutputLine[] };
   return body.lines;
+}
+
+export interface ParsedLogsResponse {
+  name: string;
+  state: ParsedLogState;
+  generation: number;
+  entries: ParsedLogEntry[];
+}
+
+export async function fetchParsedLogs(name: string): Promise<ParsedLogsResponse> {
+  const res = await fetch(`/api/logs/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`GET /api/logs/${name} failed: ${res.status}`);
+  return (await res.json()) as ParsedLogsResponse;
 }
 
 export async function restartProcess(name: string): Promise<void> {

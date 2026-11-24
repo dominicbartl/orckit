@@ -13,6 +13,7 @@ import { ProcessRow } from '../components/ProcessRow';
 import { UrlLink } from '../components/UrlLink';
 import { Sparkline } from '../components/Sparkline';
 import { BrandMark, BrandLogo } from '../components/Brand';
+import { ParsedLogSinkSections } from './sinkParsedLogs';
 import {
   IconRestart,
   IconStop,
@@ -457,6 +458,8 @@ export default function Sink() {
             <LogView lines={() => SAMPLE_LINES} ide={SAMPLE_IDE} baseDir={SAMPLE_CWD} />
           </div>
         </Section>
+
+        <ParsedLogSinkSections Section={Section} />
 
         <Section
           title="Empty state"

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, type Accessor } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on, type Accessor } from 'solid-js';
 import { Button } from '../components/Button';
 import { IconButton } from '../components/IconButton';
 import { Badge, StateBadge } from '../components/Badge';
@@ -8,6 +8,7 @@ import { TabBar } from '../components/TabBar';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { LogView } from '../components/LogView';
+import { ParsedLogView } from '../components/ParsedLogView';
 import { LinkedText } from '../components/LinkedText';
 import { ProcessGroup, groupByCategory } from '../components/ProcessGroup';
 import { BrandMark } from '../components/Brand';
@@ -153,16 +154,18 @@ function ProcessDetail(props: {
   process: Accessor<ProcessSnapshot>;
   logs: Accessor<OutputLine[]>;
 }) {
-  const [tab, setTab] = createSignal<'logs' | 'errors' | 'details'>('logs');
+  const [tab, setTab] = createSignal<DetailTab>('logs');
   const errorCount = () =>
     (props.process().lastError ? 1 : 0) + (props.process().buildErrors?.length ?? 0);
+  const hasParsed = () => props.process().parsedLogs !== undefined;
 
-  // Reset to "logs" when switching processes — avoids landing on "errors"
-  // when the new process has none.
-  createEffect(() => {
-    void props.process().name;
-    setTab('logs');
-  });
+  // Reset when switching processes — avoids landing on "errors" when the new
+  // process has none. A process with parsed logs opens on them: that's why
+  // the source is configured.
+  // Keyed on a memo of the name: a fresh snapshot (every SSE reconnect)
+  // replaces the process object, which must not bounce the user's tab.
+  const processName = createMemo(() => props.process().name);
+  createEffect(on(processName, () => setTab(hasParsed() ? 'parsed' : 'logs')));
 
   return (
     <div class="flex flex-col h-full min-h-0">
@@ -170,8 +173,17 @@ function ProcessDetail(props: {
       <div class="px-5 pt-3 pb-2 border-b border-border-subtle">
         <TabBar
           active={tab()}
-          onChange={(id) => setTab(id as 'logs' | 'errors' | 'details')}
+          onChange={(id) => setTab(id as DetailTab)}
           tabs={[
+            ...(hasParsed()
+              ? [
+                  {
+                    id: 'parsed',
+                    label: <>Parsed</>,
+                    badge: <ParsedTabDot state={props.process().parsedLogs!.state.state} />,
+                  },
+                ]
+              : []),
             { id: 'logs', label: <>Logs</> },
             {
               id: 'errors',
@@ -189,6 +201,9 @@ function ProcessDetail(props: {
             processName={props.process().name}
             cwd={props.process().cwd}
           />
+        </Show>
+        <Show when={tab() === 'parsed' && hasParsed()}>
+          <ParsedPanel process={props.process} />
         </Show>
         <Show when={tab() === 'errors'}>
           <ErrorsPanel process={props.process} />
@@ -338,6 +353,51 @@ function LogPanel(props: { logs: Accessor<OutputLine[]>; processName: string; cw
         />
       </div>
     </div>
+  );
+}
+
+type DetailTab = 'parsed' | 'logs' | 'errors' | 'details';
+
+/** Small status dot on the Parsed tab: live, waiting, unavailable, idle. */
+function ParsedTabDot(props: { state: string }) {
+  const tone = () =>
+    props.state === 'connected'
+      ? 'bg-status-ready'
+      : props.state === 'unavailable'
+        ? 'bg-status-failed'
+        : props.state === 'idle'
+          ? 'bg-status-stopped'
+          : 'bg-status-starting pulse-dot';
+  return <span class={cx('h-1.5 w-1.5 rounded-full', tone())} aria-label={props.state} />;
+}
+
+function ParsedPanel(props: { process: Accessor<ProcessSnapshot> }) {
+  const orckit = useOrckit();
+  const name = () => props.process().name;
+  const buffer = () => orckit.parsedLogsFor(name())();
+
+  // Fetch the history when the panel opens, after each reconnect of the
+  // source (new generation), and after the SSE stream itself reconnects —
+  // batches sent while it was down are gone.
+  createEffect(() => {
+    const generation = props.process().parsedLogs?.generation;
+    if (orckit.status() !== 'connected') return;
+    void generation;
+    void orckit.hydrateParsedLogs(name()).catch(() => {
+      // best-effort; SSE keeps streaming new entries
+    });
+  });
+
+  return (
+    <ParsedLogView
+      name={name()}
+      state={props.process().parsedLogs?.state}
+      entries={() => buffer()?.entries ?? []}
+      generation={buffer()?.generation}
+      storageKey={`orckit:parsed-filters:${orckit.project()}:${name()}`}
+      ide={orckit.ide()}
+      baseDir={props.process().cwd}
+    />
   );
 }
 

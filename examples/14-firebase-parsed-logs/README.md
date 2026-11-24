@@ -14,8 +14,12 @@ Firebase login). The first start installs firebase-tools via `pre_start`.
 orc start -c examples/14-firebase-parsed-logs/orckit.yaml
 ```
 
-`traffic` calls the two functions once a second. Read the parsed entries from
-the web dashboard's API:
+`traffic` calls the two functions once a second. Open the web dashboard
+(`http://127.0.0.1:7677`) and select `emulators`: it opens on the **Parsed**
+tab. Pick `OrdersController.get` in the Handler filter, search for `not found`
+to see the thrown errors, or click a row to expand its object.
+
+The same entries come from the dashboard's API:
 
 ```bash
 curl -s 'http://127.0.0.1:7677/api/logs/emulators?limit=5'

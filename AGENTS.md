@@ -236,6 +236,7 @@ emulators:
 - orckit adds `START_LOGGING_EMULATOR=true` to the process env, so it works with the Emulator UI disabled. Don't add it yourself; only set it to `false` if the user explicitly wants the logging emulator off (then `parsed_logs` reports it unavailable).
 - Only one process per emulator suite needs it — the one whose command starts the emulators, not the processes that call the functions.
 - It does not replace the raw output: stdout is captured as always.
+- Where it shows up: the web dashboard's **Parsed** tab for that process (filters by function, handler, level, status; objects as trees) and `GET /api/logs/<name>` on the dashboard's port. Point the user there instead of suggesting they grep the raw output.
 
 ## `ide` (top-level, optional)
 

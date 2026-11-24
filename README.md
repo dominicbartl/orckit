@@ -193,6 +193,8 @@ Preflight banners, failure tails (the recent stdout/stderr dump after a process 
 
 The browser dashboard at `http://127.0.0.1:7677` is the action surface — restart and stop buttons live there. Each process's [URL](#process-urls) sits in its header as a link that opens in a new tab. It mirrors the terminal's build annotations: webpack/angular processes carry a build badge (`building 67%`, `built 1.2s`, `build failed · 21 errors`) next to their state, so a failed recompile stays visible even while the dev server keeps running. `http://` and `https://` URLs in the logs are always clickable and open in a new tab. When you run inside a JetBrains IDE (a `.idea` folder is present), file references in the logs and errors — `src/app.ts:42:10` and the like — become clickable links that jump straight to the file at that line in your already-running IDE. The browser can't open an IDE itself, so clicking POSTs to orckit, which opens the file: paths **inside the project root** (the `.idea` directory) open in your IDE via its **command-line launcher** (`webstorm --line 42 …`); paths **outside it** — temp files, generated artifacts like `/var/folders/…/mailer/x.html` — open in the OS **default application** instead. Paths are resolved to absolute against each process's working directory, so monorepo subdirectories resolve correctly. This needs no JetBrains Toolbox and no plugin — just the launcher on `PATH` (create it via the IDE's **Tools → "Create Command-Line Launcher"**). A missing/dead file or an unreachable launcher surfaces as a toast. Configure the launcher with the [`ide:` block](#configuration-reference). The terminal REPL only attaches in plain mode (`--no-live` or a non-TTY stdout).
 
+A process with [`parsed_logs`](#parsed-firebase-emulator-logs) gets a **Parsed** tab with its Firebase emulator logs as structured, filterable entries.
+
 Pass `--no-live` to skip the dashboard entirely and get plain line-by-line lifecycle output plus the REPL.
 
 ## Configuration reference
@@ -473,7 +475,13 @@ processes:
 
 orckit connects while the process runs, finds the logging emulator through the Emulator Hub (`GET /emulators`, port 4400 unless `emulators.hub` in `firebase.json` says otherwise), and reconnects if the emulators restart. firebase-tools only starts the logging emulator together with the Emulator UI or when `START_LOGGING_EMULATOR=true`, so orckit adds `START_LOGGING_EMULATOR=true` to the process's `env` unless you set it there yourself. The raw stdout capture is unchanged.
 
-The entries are served by the web dashboard's HTTP API: `GET /api/logs/<name>?limit=N` returns the newest entries, and the `/events` stream carries `parsed:entries`, `parsed:reset` and `parsed:state` events. Every reconnect replays the emulator's whole history, so it starts a new `generation`: entry ids restart at 0 and a client drops whatever it held when `parsed:reset` arrives.
+In the [web dashboard](#live-dashboard) the process gets a **Parsed** tab (opened by default for it), next to the raw **Logs**:
+
+- **Filters**: multi-select **Function** and **Handler** facets with per-value counts and an "only this" shortcut, a **Level** facet, toggles for execution rows and emulator lines, `2xx`–`5xx` status chips for request logs, and a search box that matches messages, handlers, stacks and every key and value of the logged objects. Filters are remembered per process in the browser.
+- **Rows**: an execution is `ƒ <function>` with its duration (colored by speed); a request log shows its handler, method, status, latency and route as chips plus a one-line preview of the rest of the object. Click a row to expand the object as a collapsible, syntax-highlighted tree (with a "copy as JSON" button) and the stack, whose file references open in your IDE like in the Logs tab.
+- **Live**: it follows new entries while you're at the bottom, and pauses while the pointer is over the list so rows don't slide away under a click. The newest 400 matching entries are rendered; older ones load in pages from the top.
+
+The same entries are available over HTTP: `GET /api/logs/<name>?limit=N` returns the newest entries, and the `/events` stream carries `parsed:entries`, `parsed:reset` and `parsed:state` events. Every reconnect replays the emulator's whole history, so it starts a new `generation`: entry ids restart at 0 and a client drops whatever it held when `parsed:reset` arrives.
 
 Firebase doesn't tag log lines with an execution id, so entries are never grouped under the execution that produced them: concurrent calls of one function interleave in no fixed order.
 

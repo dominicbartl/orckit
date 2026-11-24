@@ -5,10 +5,13 @@ import type {
   IdeLink,
   OrckitSnapshot,
   OutputLine,
+  ParsedLogEntry,
+  ParsedLogState,
   ProcessSnapshot,
   ProcessState,
 } from './types';
-import { fetchOutput, fetchState } from './api';
+import { fetchOutput, fetchParsedLogs, fetchState } from './api';
+import { applyBatch, applyHydration, applyReset, type ParsedBuffer } from './parsedBuffer';
 
 /** Maximum buffered log lines per process — mirrors orckit's default buffer cap. */
 const MAX_LINES_PER_PROCESS = 1000;
@@ -32,6 +35,10 @@ export interface OrckitStream {
   bootSummary: Accessor<BootSummary | null>;
   /** Hydrate output buffer for a process from the server (initial backlog). */
   hydrateOutput: (name: string) => Promise<void>;
+  /** Parsed log entries for a process with `parsed_logs`, or undefined before any arrive. */
+  parsedLogsFor: (name: string) => Accessor<ParsedBuffer | undefined>;
+  /** Fetch a process's parsed log history; SSE keeps it current afterwards. */
+  hydrateParsedLogs: (name: string) => Promise<void>;
 }
 
 interface BootSummary {
@@ -73,6 +80,15 @@ const initialStore: StoreShape = {
 export function createOrckitStream(): OrckitStream {
   const [store, setStore] = createStore<StoreShape>(structuredClone(initialStore));
   const [status, setStatus] = createSignal<ConnectionStatus>('connecting');
+  // Parsed entries are immutable and arrive in batches of up to thousands, so
+  // they live in a plain signal (replaced per batch) instead of the deep store,
+  // whose proxies would wrap every node of every value tree.
+  const [parsed, setParsed] = createSignal<Record<string, ParsedBuffer>>({});
+  const updateParsed = (name: string, next: (b: ParsedBuffer | undefined) => ParsedBuffer | undefined) =>
+    setParsed((all) => {
+      const updated = next(all[name]);
+      return updated === all[name] || !updated ? all : { ...all, [name]: updated };
+    });
 
   let source: EventSource | null = null;
   let everConnected = false;
@@ -98,6 +114,7 @@ export function createOrckitStream(): OrckitStream {
     });
 
     bindHandlers(source, setStore);
+    bindParsedHandlers(source, setStore, updateParsed);
   }
 
   open();
@@ -127,6 +144,11 @@ export function createOrckitStream(): OrckitStream {
     logsFor: (name) => () => store.logs[name] ?? [],
     status,
     bootSummary: () => store.bootSummary,
+    parsedLogsFor: (name) => () => parsed()[name],
+    async hydrateParsedLogs(name: string) {
+      const res = await fetchParsedLogs(name);
+      updateParsed(name, (buf) => applyHydration(buf, res));
+    },
     async hydrateOutput(name: string) {
       const lines = await fetchOutput(name);
       setStore(
@@ -269,6 +291,44 @@ function bindHandlers(source: EventSource, setStore: SetStoreFunction<StoreShape
   source.addEventListener('boot:complete', (e) => {
     const summary = parse<BootSummary>(e);
     setStore('bootSummary', summary);
+  });
+}
+
+function bindParsedHandlers(
+  source: EventSource,
+  setStore: SetStoreFunction<StoreShape>,
+  updateParsed: (name: string, next: (b: ParsedBuffer | undefined) => ParsedBuffer | undefined) => void,
+) {
+  source.addEventListener('parsed:entries', (e) => {
+    const { name, generation, entries } = parse<{
+      name: string;
+      generation: number;
+      entries: ParsedLogEntry[];
+    }>(e);
+    updateParsed(name, (buf) => applyBatch(buf, generation, entries));
+  });
+
+  source.addEventListener('parsed:reset', (e) => {
+    const { name, generation } = parse<{ name: string; generation: number }>(e);
+    updateParsed(name, (buf) => applyReset(buf, generation));
+    setStore(
+      produce((s) => {
+        const p = s.processes[name];
+        if (p?.parsedLogs) p.parsedLogs.generation = generation;
+      }),
+    );
+  });
+
+  source.addEventListener('parsed:state', (e) => {
+    const { name, state } = parse<{ name: string; state: ParsedLogState }>(e);
+    setStore(
+      produce((s) => {
+        const p = s.processes[name];
+        if (!p) return;
+        if (p.parsedLogs) p.parsedLogs.state = state;
+        else p.parsedLogs = { state, generation: 0, count: 0 };
+      }),
+    );
   });
 }
 

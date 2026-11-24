@@ -60,6 +60,15 @@
   --color-hl-cyan: oklch(0.78 0.12 200);
   --color-hl-gray: oklch(0.58 0.008 250);
 
+  /* Syntax colors for parsed log values (keys, strings, numbers, …) */
+  --color-syntax-key: oklch(0.80 0.06 240);
+  --color-syntax-string: oklch(0.80 0.12 150);
+  --color-syntax-number: oklch(0.82 0.12 70);
+  --color-syntax-boolean: oklch(0.76 0.14 320);
+  --color-syntax-null: oklch(0.60 0.01 250);
+  --color-syntax-special: oklch(0.78 0.10 200);
+  --color-syntax-punct: oklch(0.52 0.01 250);
+
   /* Radii + shadows tuned for a tool-like, not-too-rounded feel */
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;

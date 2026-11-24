@@ -1,6 +1,8 @@
 # Plan: parsed Firebase emulator logs in the web UI
 
-Status: **step 0 done, implementation not started.** Real traffic is recorded in
+Status: **steps 0–5 done: the Parsed tab works end to end.** Remaining: step 6
+(the `get_function_logs` MCP tool), step 7 (any docs still missing) and step 8
+(an end-to-end pass on the real project). Real traffic is recorded in
 [`tests/fixtures/firebase-logging/`](../../tests/fixtures/firebase-logging/README.md),
 and the findings are folded in below (marked *step 0*). `engines.node` is now
 `>=22`.
@@ -338,7 +340,47 @@ a **devDependency** for the fake logging-emulator server in tests.
    - **Commit together with step 5.** `parsed_logs` is documented as feeding
      the dashboard's API. The visible Parsed tab only comes in step 5, so
      release them together.
-5. Frontend components, sink fixtures and the Parsed tab.
+5. ~~Frontend components, sink fixtures and the Parsed tab.~~ **Done.**
+   - **Store:** entries live in a plain signal per process
+     (`lib/parsedBuffer.ts`), not the deep store, whose proxies would wrap
+     every node of every value tree. Pure merge rules follow the §3.3 client
+     contract. The panel re-hydrates on open, on a new generation, and after
+     the SSE stream reconnects (batches sent while it was down are gone).
+   - **Components:** `ValueTree` (syntax-highlighted, collapsible, every
+     inspect annotation shown), `ParsedEntryRow` (execution / request log with
+     chips and preview / Nest context / system line, expandable),
+     `MultiSelect` (facet with counts, "only", all/none, filter box) and
+     `ParsedLogView` (toolbar, source pill, list, empty and state variants).
+     Pure helpers sit in `lib/logValue.ts` and `lib/parsedFilter.ts`.
+   - **Dashboard:** a **Parsed** tab with a status dot, the default tab for
+     a process with `parsed_logs`. Filters persist per process in
+     `localStorage`.
+   - **Deviations from §2:**
+     - The "N in flight" header indicator is left out. In-flight counts aren't
+       on the wire (§3.3), and nothing asked for them in use.
+     - Executions and system lines got their own toggles instead of a
+       "system" level.
+     - **Windowing:** only the newest 400 matches render, with "show older"
+       paging from the top. In a production build with 5,000 entries,
+       clearing a search took about 500 ms with every row rendered and 22–28
+       ms windowed; the first render takes 25 ms.
+     - **Hover pause:** following the bottom pauses while the pointer is over
+       the list. A live stream slid rows out from under clicks.
+   - **Found by testing against example 14 in the browser:**
+     - `on()` re-runs on every notification of its source, so each live
+       batch collapsed expanded rows. The source is now a memo.
+     - `a && b` in a JSX attribute passed `false` instead of `null`, which
+       made idle facets look narrowed.
+     - `<For>` remounted facet options on every batch, so hover was lost
+       mid-click. They now use `<Index>`.
+     - Every boot flashed `unavailable` for about 2 s, because the hub
+       answers before the logging emulator registers. The source now reports
+       `waiting` until the hub has gone 10 s without one
+       (`unavailableAfterMs`).
+   - **Verified end to end with example 14:** facets, search, expand and
+     copy, a restart from the UI (idle → waiting → connected, generation 2,
+     the client's 140 entries equal the server's with contiguous ids), and
+     the raw Logs tab unchanged.
 6. The `get_function_logs` MCP tool plus tests.
 7. Docs: README (`parsed_logs:` config reference, MCP section, events), AGENTS.md,
    a Firebase example in `examples/`, and `engines`.

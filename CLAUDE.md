@@ -285,6 +285,8 @@ The snapshot also carries an `ide: IdeLink | null` field (just `{ command }`, th
 
 The frontend lives in **`packages/web-ui/`** (a pnpm workspace, `@orckit/web-ui`, private, not published). It's SolidJS + Vite + Tailwind v4. Build it with `pnpm build:web` from the root; the static assets get copied into the cli package's tarball so end users get one `npm i @orckit/cli` without needing to run two build systems.
 
+The **Parsed** tab (`ParsedLogView`, for processes with `parsed_logs`) keeps entries outside the deep store: `lib/parsedBuffer.ts` holds them per process in a plain signal and merges the `/api/logs` fetch with SSE batches by generation and id (pure functions — a newer generation replaces, an older one is dropped, ids at or below the last held one are skipped). Two Solid traps it hit, worth knowing anywhere in the frontend: `on(source, …)` re-runs on every *notification* of `source`, not only on value changes — wrap a derived value in `createMemo` before keying an effect on it; and `a && b` inside a JSX attribute compiles to a memoised boolean test, so `prop={list && new Set(list)}` passes `false`, not `null`.
+
 The `/sink` route is the design system kitchen sink — every component in every state with static fixtures. Keep it in sync when adding or modifying components in `packages/web-ui/src/components/`.
 
 ## Worktree sandboxes: one `orc start`, two processes
