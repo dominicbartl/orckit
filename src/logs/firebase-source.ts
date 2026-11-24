@@ -35,6 +35,12 @@ export interface FirebaseSourceOptions {
   retryMs?: number;
   /** Default 5000. */
   maxRetryMs?: number;
+  /**
+   * How long the hub may answer without a logging emulator before that is
+   * reported as `unavailable`. Until then it's `waiting`: on every boot the
+   * hub is up a moment before the logging emulator registers. Default 10 s.
+   */
+  unavailableAfterMs?: number;
 }
 
 export interface FirebaseSource {
@@ -43,6 +49,7 @@ export interface FirebaseSource {
 }
 
 const HUB_TIMEOUT_MS = 2000;
+const UNAVAILABLE_AFTER_MS = 10_000;
 
 export const LOGGING_EMULATOR_HINT =
   'the logging emulator is not running — enable the Emulator UI (emulators.ui in firebase.json) ' +
@@ -51,6 +58,9 @@ export const LOGGING_EMULATOR_HINT =
 export function connectFirebaseLogs(opts: FirebaseSourceOptions): FirebaseSource {
   const retryMs = opts.retryMs ?? 500;
   const maxRetryMs = opts.maxRetryMs ?? 5000;
+  const unavailableAfterMs = opts.unavailableAfterMs ?? UNAVAILABLE_AFTER_MS;
+  /** When the hub was first seen without a logging emulator, this boot. */
+  let noLoggingSince: number | null = null;
   let closed = false;
   let delay = retryMs;
   let timer: NodeJS.Timeout | undefined;
@@ -78,8 +88,21 @@ export function connectFirebaseLogs(opts: FirebaseSourceOptions): FirebaseSource
     const found = await discover(opts.hub, discovery.signal);
     discovery = null;
     if (closed) return;
-    if ('state' in found) retry(found);
-    else open(found.url);
+    if (!('state' in found)) {
+      open(found.url);
+      return;
+    }
+    if (found.state !== 'unavailable') {
+      noLoggingSince = null;
+      retry(found);
+      return;
+    }
+    noLoggingSince ??= Date.now();
+    retry(
+      Date.now() - noLoggingSince < unavailableAfterMs
+        ? { state: 'waiting', detail: `waiting for the logging emulator (hub at ${opts.hub})` }
+        : found,
+    );
   };
 
   const open = (url: string) => {
@@ -96,6 +119,7 @@ export function connectFirebaseLogs(opts: FirebaseSourceOptions): FirebaseSource
       if (closed || socket !== ws) return;
       opened = true;
       delay = retryMs;
+      noLoggingSince = null;
       opts.onConnect();
       setState({ state: 'connected', url });
     };

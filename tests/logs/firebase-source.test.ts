@@ -22,7 +22,7 @@ async function emulator(opts?: Parameters<typeof startFakeEmulator>[0]): Promise
 }
 
 /** Connect with fast retries and record everything the source reports. */
-function connect(hub: string) {
+function connect(hub: string, opts: { unavailableAfterMs?: number } = {}) {
   const log: (
     | { kind: 'connect' }
     | { kind: 'bundle'; bundle: FirebaseLogBundle }
@@ -32,6 +32,7 @@ function connect(hub: string) {
     hub,
     retryMs: 10,
     maxRetryMs: 40,
+    ...opts,
     onConnect: () => log.push({ kind: 'connect' }),
     onBundle: (bundle) => log.push({ kind: 'bundle', bundle }),
     onState: (state) => log.push({ kind: 'state', state }),
@@ -64,7 +65,7 @@ describe('connectFirebaseLogs', () => {
 
   it('reports a missing logging emulator with a hint, then connects once it appears', async () => {
     const fake = await emulator({ logging: false });
-    const c = connect(fake.hub);
+    const c = connect(fake.hub, { unavailableAfterMs: 0 });
     await waitFor(() =>
       expect(c.log).toContainEqual({
         kind: 'state',
@@ -150,9 +151,35 @@ describe('connectFirebaseLogs', () => {
     expect(fake.connections()).toBe(1);
   });
 
-  it('stops retrying once closed', async () => {
+  it('treats a hub without a logging emulator as still booting at first', async () => {
+    // On every boot the hub answers a moment before the logging emulator has
+    // registered; that must not flash the "not running — enable it" hint.
     const fake = await emulator({ logging: false });
     const c = connect(fake.hub);
+    await waitFor(() =>
+      expect(c.log).toContainEqual({
+        kind: 'state',
+        state: {
+          state: 'waiting',
+          detail: `waiting for the logging emulator (hub at ${fake.hub})`,
+        },
+      }),
+    );
+    fake.setLogging(true);
+    await waitFor(() => expect(c.states().at(-1)).toBe('connected'));
+    expect(c.states()).not.toContain('unavailable');
+  });
+
+  it('reports unavailable once the hub has gone without one past the grace period', async () => {
+    const fake = await emulator({ logging: false });
+    const c = connect(fake.hub, { unavailableAfterMs: 60 });
+    await waitFor(() => expect(c.states()).toContain('waiting'));
+    await waitFor(() => expect(c.states().at(-1)).toBe('unavailable'));
+  });
+
+  it('stops retrying once closed', async () => {
+    const fake = await emulator({ logging: false });
+    const c = connect(fake.hub, { unavailableAfterMs: 0 });
     await waitFor(() => expect(c.states()).toContain('unavailable'));
     c.source.close();
     fake.setLogging(true);
