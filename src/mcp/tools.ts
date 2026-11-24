@@ -7,6 +7,9 @@ import type { OrckitConfig } from '../config/schema.js';
 import type { OutputLine } from '../process/output.js';
 import { applyBuildEvent, type BuildTracker } from '../process/build-tracker.js';
 import { getParser, type BuildEvent, type BuildStatus } from '../process/parsers.js';
+import type { FirebaseLogEntry, LogLevel } from '../logs/firebase.js';
+import { toJson } from '../logs/inspect-parse.js';
+import type { ParsedLogTracker } from '../logs/tracker.js';
 
 /**
  * Minimum surface the tool helpers need from an Orckit. The full `Orckit`
@@ -379,6 +382,260 @@ export function formatWaitForBuildText(result: WaitForBuildResult): string {
   return head2;
 }
 
+// --- parsed function logs --------------------------------------------------
+
+/** The slice of the parsed-log tracker `get_function_logs` reads. */
+export type ParsedLogsView = Pick<ParsedLogTracker, 'names' | 'state' | 'entries' | 'generation'>;
+
+export interface FunctionLogsArgs {
+  /** Process with `parsed_logs`; optional when exactly one has it. */
+  name?: string;
+  /** `europe-west1-api` or just `api`. */
+  function?: string;
+  /** Case-insensitive substring of the handler (`OrdersController`, `.get`). */
+  handler?: string;
+  /** Minimum severity. */
+  level?: LogLevel;
+  /** An exact status (`404`) or a class (`4xx`). */
+  status?: string;
+  /** Case-insensitive substring of the message, stack or logged fields. */
+  search?: string;
+  include_executions?: boolean;
+  include_system?: boolean;
+  limit?: number;
+}
+
+export interface FunctionLogEntry {
+  id: number;
+  /** ISO timestamp. */
+  time: string;
+  kind: FirebaseLogEntry['kind'];
+  function?: string;
+  level?: LogLevel;
+  handler?: string;
+  /** NestJS logger context. */
+  context?: string;
+  message?: string;
+  /** The logged object / structured fields as plain JSON. */
+  fields?: unknown;
+  stack?: string;
+  durationMs?: number;
+}
+
+export interface FunctionLogsResult {
+  name: string;
+  /** Source state: idle / connecting / waiting / unavailable / connected. */
+  source: string;
+  detail?: string;
+  generation: number;
+  /** Entries kept for the process. */
+  total: number;
+  /** Entries matching the filters (before `limit`). */
+  matched: number;
+  entries: FunctionLogEntry[];
+}
+
+export const DEFAULT_FUNCTION_LOGS_LIMIT = 50;
+export const MAX_FUNCTION_LOGS_LIMIT = 500;
+const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+/** `europe-west1-api` → `api`. */
+function shortFunctionName(fn: string): string {
+  return fn.replace(/^[a-z]+(?:-[a-z]+)*\d+-/, '');
+}
+
+function entryFields(entry: FirebaseLogEntry): unknown {
+  return entry.kind === 'log' && entry.value ? toJson(entry.value) : undefined;
+}
+
+function entryStatus(fields: unknown): number | undefined {
+  if (!fields || typeof fields !== 'object') return undefined;
+  const { status, statusCode } = fields as { status?: unknown; statusCode?: unknown };
+  const value = typeof status === 'number' ? status : statusCode;
+  return typeof value === 'number' ? value : undefined;
+}
+
+function statusMatches(status: number | undefined, wanted: string): boolean {
+  if (status === undefined) return false;
+  const cls = /^([1-5])xx$/i.exec(wanted.trim());
+  return cls ? Math.floor(status / 100) === Number(cls[1]) : status === Number(wanted);
+}
+
+/**
+ * Parsed Firebase emulator entries for a process, filtered for an agent:
+ * request logs by function, handler, level, status and text. Executions and
+ * emulator system lines are left out unless asked for — they are noise when
+ * hunting a request's log — except that a `warn`/`error` level brings system
+ * lines along (a codebase that failed to load is what such a query is after).
+ */
+export function buildFunctionLogs(
+  view: ParsedLogsView,
+  args: FunctionLogsArgs,
+): FunctionLogsResult {
+  const names = view.names();
+  if (names.length === 0) throw new Error('no process has parsed_logs configured');
+  const name = args.name ?? (names.length === 1 ? names[0]! : undefined);
+  if (name === undefined) {
+    throw new Error(`several processes have parsed_logs — pass name (one of: ${names.join(', ')})`);
+  }
+  const state = view.state(name);
+  if (!state) {
+    throw new Error(
+      `process "${name}" has no parsed_logs (processes with it: ${names.join(', ')})`,
+    );
+  }
+
+  const fn = args.function?.trim();
+  const handler = args.handler?.trim().toLowerCase();
+  const search = args.search?.trim().toLowerCase();
+  const minLevel = args.level ? LEVEL_RANK[args.level] : undefined;
+  // Asking for warnings or errors means asking what's wrong — and the
+  // emulator's own load failures are among the answers.
+  const includeSystem =
+    args.include_system ?? (minLevel !== undefined && minLevel >= LEVEL_RANK.warn);
+  const all = view.entries(name);
+
+  const matched = all.filter((entry) => {
+    if (entry.kind === 'execution' && !args.include_executions) return false;
+    if (entry.kind === 'system' && !includeSystem) return false;
+    if (fn && !(entry.fn === fn || (entry.fn && shortFunctionName(entry.fn) === fn))) return false;
+    if (handler && !(entry.kind === 'log' && entry.handler?.toLowerCase().includes(handler))) {
+      return false;
+    }
+    if (
+      minLevel !== undefined &&
+      (entry.kind === 'execution' || LEVEL_RANK[entry.level] < minLevel)
+    ) {
+      return false;
+    }
+    if (args.status && !statusMatches(entryStatus(entryFields(entry)), args.status)) return false;
+    if (search) {
+      const text =
+        entry.kind === 'execution'
+          ? entry.fn
+          : [entry.message, entry.stack ?? '', JSON.stringify(entryFields(entry) ?? '')].join('\n');
+      if (!text.toLowerCase().includes(search)) return false;
+    }
+    return true;
+  });
+
+  const limit = clamp(args.limit ?? DEFAULT_FUNCTION_LOGS_LIMIT, 1, MAX_FUNCTION_LOGS_LIMIT);
+  return {
+    name,
+    source: state.state,
+    ...('detail' in state && { detail: state.detail }),
+    generation: view.generation(name),
+    total: all.length,
+    matched: matched.length,
+    entries: matched.slice(-limit).map(toFunctionLogEntry),
+  };
+}
+
+function toFunctionLogEntry(entry: FirebaseLogEntry): FunctionLogEntry {
+  const base = {
+    id: entry.id,
+    time: new Date(entry.ts).toISOString(),
+    kind: entry.kind,
+    ...(entry.fn && { function: entry.fn }),
+  };
+  if (entry.kind === 'execution') return { ...base, durationMs: entry.durationMs };
+  const fields = entryFields(entry);
+  return {
+    ...base,
+    level: entry.level,
+    ...(entry.kind === 'log' && entry.handler && { handler: entry.handler }),
+    ...(entry.kind === 'log' && entry.context && { context: entry.context }),
+    message: entry.message,
+    ...(fields !== undefined && { fields }),
+    ...(entry.stack && { stack: entry.stack }),
+  };
+}
+
+/** Stack frames shown per entry in the text form; the JSON carries all of them. */
+const TEXT_STACK_FRAMES = 4;
+
+export function formatFunctionLogsText(result: FunctionLogsResult): string {
+  const head =
+    `${result.name} — parsed logs ${result.source}` +
+    (result.detail ? ` (${result.detail})` : '') +
+    ` · ${result.matched} of ${result.total} entries match` +
+    (result.entries.length < result.matched ? `, showing the newest ${result.entries.length}` : '');
+  if (result.entries.length === 0) return `${head}\n  (no matching entries)`;
+  const lines = result.entries.map((e) => {
+    const time = e.time.slice(11, 23);
+    const fn = e.function ? shortFunctionName(e.function) : '-';
+    if (e.kind === 'execution') return `  ${time} ƒ ${fn} ${e.durationMs}ms`;
+    const level = (e.level ?? 'info').toUpperCase().padEnd(5);
+    const context = e.context ? `[${e.context}] ` : '';
+    const fields = e.fields !== undefined ? ` ${JSON.stringify(e.fields)}` : '';
+    const stack = e.stack
+      ? '\n' +
+        e.stack
+          .split('\n')
+          .slice(0, TEXT_STACK_FRAMES)
+          .map((l) => `      ${l.trim()}`)
+          .join('\n')
+      : '';
+    // Continuation lines of a multi-line message (`Require stack:` …) are
+    // indented like stack frames, so every entry stays one indented block.
+    const message = (e.message ?? '').replace(/\n/g, '\n      ');
+    return `  ${time} ${level} ${fn} ${context}${message}${fields}${stack}`;
+  });
+  return `${head}\n${lines.join('\n')}`;
+}
+
+const functionLogsInputShape = {
+  name: z
+    .string()
+    .optional()
+    .describe('Process with parsed_logs (orckit.yaml name). Optional when only one has it.'),
+  function: z
+    .string()
+    .optional()
+    .describe('Firebase function, full (europe-west1-api) or short (api) name.'),
+  handler: z
+    .string()
+    .optional()
+    .describe(
+      'Case-insensitive substring of the Controller.method handler, e.g. "OrdersController".',
+    ),
+  level: z
+    .enum(['debug', 'info', 'warn', 'error'])
+    .optional()
+    .describe('Minimum level: "warn" returns warnings and errors.'),
+  status: z
+    .string()
+    .regex(/^(?:[1-5]xx|[1-5]\d\d)$/i)
+    .optional()
+    .describe('HTTP status of request logs: exact ("404") or a class ("5xx").'),
+  search: z
+    .string()
+    .optional()
+    .describe('Case-insensitive text to find in the message, stack or logged fields.'),
+  include_executions: z
+    .boolean()
+    .optional()
+    .describe(
+      'Also return one entry per finished function execution with its duration (default false).',
+    ),
+  include_system: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also return the emulator's own lines: start-up, load errors. Default: true when level " +
+        'is warn or error, false otherwise.',
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_FUNCTION_LOGS_LIMIT)
+    .optional()
+    .describe(
+      `Newest matching entries to return (default ${DEFAULT_FUNCTION_LOGS_LIMIT}, max ${MAX_FUNCTION_LOGS_LIMIT}).`,
+    ),
+};
+
 const logsInputShape = {
   name: z.string().describe('Process name as defined in orckit.yaml.'),
   lines: z
@@ -420,7 +677,37 @@ export function registerTools(
   lastErrors: Map<string, string>,
   tracker: BuildTracker,
   publicUrl?: (url: string) => string,
+  parsedLogs?: ParsedLogsView | null,
 ): void {
+  // Only offered when some process has `parsed_logs`, so agents never see a
+  // tool that can't answer.
+  if (parsedLogs && parsedLogs.names().length > 0) {
+    server.registerTool(
+      'get_function_logs',
+      {
+        title: 'Firebase function logs',
+        description:
+          'Get structured logs from the Firebase emulators (processes with parsed_logs): what ' +
+          "the user's Cloud Functions logged, one entry per console.log call or structured log " +
+          'line, with the logged object as JSON fields, the function it ran in, the ' +
+          'Controller.method handler when there is one, the level, and the stack of errors. ' +
+          'Filter by function, handler, minimum level, HTTP status (404 / 5xx) or text instead ' +
+          'of grepping raw output with get_logs. Function executions (with durations) are ' +
+          'excluded unless include_executions is set; emulator system lines (start-up, load ' +
+          'errors) unless include_system is set or level is warn/error.',
+        inputSchema: functionLogsInputShape,
+      },
+      async (args) => {
+        try {
+          const result = buildFunctionLogs(parsedLogs, args);
+          return toResult(formatFunctionLogsText(result), result);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      },
+    );
+  }
+
   server.registerTool(
     'get_status',
     {

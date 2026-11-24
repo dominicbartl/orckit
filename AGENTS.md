@@ -236,7 +236,7 @@ emulators:
 - orckit adds `START_LOGGING_EMULATOR=true` to the process env, so it works with the Emulator UI disabled. Don't add it yourself; only set it to `false` if the user explicitly wants the logging emulator off (then `parsed_logs` reports it unavailable).
 - Only one process per emulator suite needs it — the one whose command starts the emulators, not the processes that call the functions.
 - It does not replace the raw output: stdout is captured as always.
-- Where it shows up: the web dashboard's **Parsed** tab for that process (filters by function, handler, level, status; objects as trees) and `GET /api/logs/<name>` on the dashboard's port. Point the user there instead of suggesting they grep the raw output.
+- Where it shows up: the web dashboard's **Parsed** tab for that process (filters by function, handler, level, status; objects as trees), the MCP tool `get_function_logs`, and `GET /api/logs/<name>` on the dashboard's port. Point the user there instead of suggesting they grep the raw output.
 
 ## `ide` (top-level, optional)
 
@@ -328,12 +328,13 @@ Full event list and CLI flag reference: [README.md](README.md).
 
 ## Querying a running orckit
 
-If the user is already running `orc start` in another terminal, prefer querying its MCP server over spawning a new `orc`. `orc start` exposes read-only tools by default (`get_status`, `get_errors`, `get_logs`, `get_build_status`, `wait_for_build`) on `http://127.0.0.1:7676/mcp`. The user only needs to register it once with `claude mcp add --transport http orckit http://127.0.0.1:7676/mcp`.
+If the user is already running `orc start` in another terminal, prefer querying its MCP server over spawning a new `orc`. `orc start` exposes read-only tools by default (`get_status`, `get_errors`, `get_logs`, `get_build_status`, `wait_for_build`, plus `get_function_logs` when a process has `parsed_logs`) on `http://127.0.0.1:7676/mcp`. The user only needs to register it once with `claude mcp add --transport http orckit http://127.0.0.1:7676/mcp`.
 
 - "Is the build running?" / "what's failing?" → call `get_status` (and `get_errors` if anything is in a failed state).
 - "Where is the frontend served?" / "open the app" → `get_status` includes each process's `url` (dev-server URL detected from its output, or configured).
 - "Show me the recent api output" → call `get_logs` with `{ name: 'api', lines: 100 }`.
 - **Before running your own build/typecheck to verify a change** → call `get_build_status` (or `wait_for_build` with `{ name: 'web' }`) and use orckit's result. orckit already runs the project's watch build; spawning a duplicate `webpack`/`ng build`/`tsc` is wasteful and can race the watcher. Build phase is only tracked for `webpack`/`angular` process types — for others, fall back to running the check yourself.
+- "What did the orders function log?" / "why did that request 500?" → with `parsed_logs` configured, call `get_function_logs` (e.g. `{ handler: 'OrdersController', status: '5xx' }` or `{ function: 'api', level: 'error' }`) instead of grepping `get_logs`: it returns each `console.log` call as one entry with the logged object as JSON and the error stack split off.
 - If the tools aren't connectable, the user hasn't started orckit — tell them to run `orc start` rather than silently spawning your own.
 
 The port can be changed via `mcp.port` in YAML or `--mcp-port`; disable entirely with `mcp.enabled: false` or `--no-mcp`.

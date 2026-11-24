@@ -296,6 +296,19 @@ program
         links.push({ label: 'logs', value: logReporter.dir });
       }
 
+      // Parsed log sources hold sockets to the emulators, so there is one
+      // tracker per `orc start`, shared by the dashboard and the MCP server and
+      // created only when one of them runs.
+      const parsedLogSources = Object.fromEntries(
+        Object.entries(config.processes).flatMap(([name, p]) =>
+          p.parsed_logs ? [[name, p.parsed_logs] as const] : [],
+        ),
+      );
+      let parsedLogs: ParsedLogTracker | null =
+        Object.keys(parsedLogSources).length > 0 && (servers.web !== null || servers.mcp !== null)
+          ? trackParsedLogs(orckit, { processes: parsedLogSources })
+          : null;
+
       let mcpServer: McpServerHandle | null = null;
       if (cliMcpPort != null && !config.mcp.enabled) {
         console.warn(
@@ -309,6 +322,7 @@ program
             port: servers.mcp,
             host: config.mcp.host,
             publicUrl: processUrl,
+            parsedLogs,
           });
           links.push({ label: 'mcp', value: publicUrl(mcpServer.url) });
         } catch (err) {
@@ -322,9 +336,6 @@ program
       }
 
       let webServer: WebUiServerHandle | null = null;
-      // Parsed log sources hold sockets to the emulators, so there is one
-      // tracker per `orc start`, created only when something reads it.
-      let parsedLogs: ParsedLogTracker | null = null;
       if (cliWebPort != null && !config.web.enabled) {
         console.warn(
           chalk.yellow(
@@ -341,14 +352,6 @@ program
           : config.ide.enabled
             ? detectIde(dirname(configPath), { command: config.ide.command })
             : null;
-        const parsedLogSources = Object.fromEntries(
-          Object.entries(config.processes).flatMap(([name, p]) =>
-            p.parsed_logs ? [[name, p.parsed_logs] as const] : [],
-          ),
-        );
-        if (Object.keys(parsedLogSources).length > 0) {
-          parsedLogs = trackParsedLogs(orckit, { processes: parsedLogSources });
-        }
         try {
           webServer = await attachWebUi(orckit, {
             port: servers.web,
@@ -362,8 +365,6 @@ program
           links.unshift({ label: 'web', value: publicUrl(webServer.url) });
           if (ide) links.push({ label: 'ide', value: `file links open via \`${ide.command}\`` });
         } catch (err) {
-          parsedLogs?.dispose();
-          parsedLogs = null;
           console.error(chalk.yellow(`  web dashboard failed to start: ${(err as Error).message}`));
           console.error(
             chalk.dim(
@@ -371,6 +372,12 @@ program
             ),
           );
         }
+      }
+
+      // Neither server came up (ports taken): nothing reads the parsed logs.
+      if (parsedLogs && !webServer && !mcpServer) {
+        parsedLogs.dispose();
+        parsedLogs = null;
       }
 
       // Pick a UI: persistent dashboard if we have a TTY (and --no-live wasn't

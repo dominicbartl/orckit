@@ -4,6 +4,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { Orckit } from '../../src/orchestrator/orchestrator.js';
 import { validateConfig } from '../../src/config/load.js';
 import { attachMcpServer, type McpServerHandle } from '../../src/mcp/server.js';
+import type { ParsedLogTracker } from '../../src/logs/tracker.js';
+import type { FirebaseLogEntry } from '../../src/logs/firebase.js';
 
 describe('attachMcpServer over Streamable HTTP', () => {
   let orckit: Orckit;
@@ -189,3 +191,99 @@ function extractJson(result: unknown): {
   const inner = jsonBlock.text.replace(/^```json\n/, '').replace(/\n```$/, '');
   return JSON.parse(inner);
 }
+
+describe('attachMcpServer with parsed logs', () => {
+  const entries: FirebaseLogEntry[] = [
+    {
+      kind: 'execution',
+      id: 0,
+      ts: Date.UTC(2026, 10, 24, 9, 0, 0),
+      fn: 'europe-west1-api',
+      durationMs: 31,
+    },
+    {
+      kind: 'log',
+      id: 1,
+      ts: Date.UTC(2026, 10, 24, 9, 0, 0, 5),
+      fn: 'europe-west1-api',
+      level: 'info',
+      message: 'OrdersController.get executed',
+      handler: 'OrdersController.get',
+      value: {
+        kind: 'object',
+        props: [{ key: 'status', value: { kind: 'number', text: '404' } }],
+      },
+      lineCount: 4,
+    },
+  ];
+  // Only the read side `get_function_logs` uses.
+  const tracker = {
+    names: () => ['emulators'],
+    state: (name: string) =>
+      name === 'emulators' ? { source: 'firebase', state: 'connected', url: 'ws://x' } : undefined,
+    entries: () => entries,
+    generation: () => 1,
+  } as unknown as ParsedLogTracker;
+
+  let orckit: Orckit;
+  let server: McpServerHandle;
+  let client: Client;
+
+  beforeEach(async () => {
+    orckit = new Orckit(
+      validateConfig({ project: 'mcp-parsed', processes: { emulators: { command: 'sleep 1' } } }),
+    );
+    server = await attachMcpServer(orckit, { port: 0, parsedLogs: tracker });
+    client = new Client({ name: 'orckit-mcp-test', version: '0.0.0' }, { capabilities: {} });
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await server.dispose();
+    await orckit.dispose();
+  });
+
+  it('offers get_function_logs with optional filters', async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'get_function_logs')!;
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.required ?? []).toEqual([]);
+    expect(Object.keys(tool.inputSchema.properties ?? {}).sort()).toEqual([
+      'function',
+      'handler',
+      'include_executions',
+      'include_system',
+      'level',
+      'limit',
+      'name',
+      'search',
+      'status',
+    ]);
+  });
+
+  it('answers with text and structured entries', async () => {
+    const result = await client.callTool({
+      name: 'get_function_logs',
+      arguments: { handler: 'orders', status: '4xx' },
+    });
+    expect(result.isError).toBeFalsy();
+    const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+    expect(text).toContain('emulators — parsed logs connected · 1 of 2 entries match');
+    expect(text).toContain('INFO  api OrdersController.get executed {"status":404}');
+    // Tools return their JSON as a second, fenced text block.
+    expect(extractJson(result)).toMatchObject({
+      name: 'emulators',
+      matched: 1,
+      entries: [{ id: 1, handler: 'OrdersController.get', fields: { status: 404 } }],
+    });
+  });
+
+  it('reports a bad process name as a tool error', async () => {
+    const result = await client.callTool({ name: 'get_function_logs', arguments: { name: 'api' } });
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0]!.text).toMatch(
+      /"api" has no parsed_logs/,
+    );
+  });
+});

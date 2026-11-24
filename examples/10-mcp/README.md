@@ -17,13 +17,16 @@ You'll see something like:
 ```
 
 In a Claude Code session, run the printed `claude mcp add` command once.
-After that, Claude can call three tools:
+After that, Claude can call these tools:
 
 | Tool | What it does |
 |---|---|
-| `get_status` | List every process with its state, PID, uptime, retries |
+| `get_status` | List every process with its state, PID, uptime, retries, URL |
 | `get_errors` | Failed processes only, with last error message + recent stderr |
 | `get_logs` | Recent stdout/stderr for a named process |
+| `get_build_status` | Build phase and diagnostics of `webpack`/`angular` processes (none here) |
+| `wait_for_build` | Block until a build settles (none here) |
+| `get_function_logs` | Structured Firebase function logs — only offered with `parsed_logs` (see [`14-firebase-parsed-logs`](../14-firebase-parsed-logs)) |
 
 ## Try asking Claude
 

@@ -1,8 +1,6 @@
 # Plan: parsed Firebase emulator logs in the web UI
 
-Status: **steps 0–5 done: the Parsed tab works end to end.** Remaining: step 6
-(the `get_function_logs` MCP tool), step 7 (any docs still missing) and step 8
-(an end-to-end pass on the real project). Real traffic is recorded in
+Status: **done: steps 0–8 are complete.** Real traffic is recorded in
 [`tests/fixtures/firebase-logging/`](../../tests/fixtures/firebase-logging/README.md),
 and the findings are folded in below (marked *step 0*). `engines.node` is now
 `>=22`.
@@ -381,13 +379,54 @@ a **devDependency** for the fake logging-emulator server in tests.
      copy, a restart from the UI (idle → waiting → connected, generation 2,
      the client's 140 entries equal the server's with contiguous ids), and
      the raw Logs tab unchanged.
-6. The `get_function_logs` MCP tool plus tests.
-7. Docs: README (`parsed_logs:` config reference, MCP section, events), AGENTS.md,
-   a Firebase example in `examples/`, and `engines`.
-8. **End-to-end on linden:** use the filters and expand entries, restart the
-   emulators from the UI (the tab resets and refills, with no duplicates), stop
-   them (status goes to unavailable, no reconnect storm), and Ctrl-C (no hung
-   socket blocks teardown).
+6. ~~The `get_function_logs` MCP tool.~~ **Done.**
+   - **Arguments:** all optional.
+     - `name` can be left out when exactly one process has `parsed_logs`.
+     - `function` takes the full or short name.
+     - `handler` is a case-insensitive substring.
+     - `level` is a minimum.
+     - `status` is `404` or `5xx`.
+     - also `search`, `include_executions`, `include_system` and `limit`
+       (50, max 500).
+   - **Defaults:** request logs only. Executions are noise when hunting a
+     request. A `warn`/`error` level brings emulator system lines along,
+     because against molzait `level: warn` first returned nothing while a
+     functions codebase was failing to load.
+   - **Output:** compact text (one indented block per entry, four stack frames)
+     plus JSON with the logged object as plain JSON (`toJson`).
+   - **Registration:** only when some process has `parsed_logs`. The CLI now
+     creates the shared tracker when the web *or* MCP server runs, and
+     disposes it if neither binds.
+   - **Tests:** handler tests over assembled fixtures, plus registration and a
+     real call through an MCP client.
+7. ~~Docs.~~ **Done** across steps 4–6:
+   - README: the config line, a "Parsed Firebase emulator logs" section, the
+     Parsed tab and the MCP table row
+   - AGENTS.md: the decision section, checklist item 14 and "Querying a
+     running orckit"
+   - CLAUDE.md: layout, web and MCP notes
+   - `examples/14-firebase-parsed-logs`, and `engines` at Node 22
+   - also fixed the stale "three tools" in `examples/10-mcp`
+8. ~~End-to-end on the real project.~~ **Done, read-only.**
+   - **Setup:** molzait's `orc start` was running, and restarting its
+     emulators would cascade-restart the stack and drop the emulators'
+     in-memory data. So a separate orckit attached to its hub (127.0.0.1:4400)
+     with a placeholder process plus `parsed_logs`, as a second reader of the
+     logging stream next to the Emulator UI.
+   - **Results:**
+     - 3,431 entries replayed (2,133 executions, 818 logs, 480 system lines)
+       across about 15 trigger functions.
+     - The Parsed tab rendered them. The function facet listed every
+       function with its filter box, which now takes focus when the facet
+       opens.
+     - `get_function_logs` over MCP answered function, handler, search and
+       error queries; `level: error` surfaced the SSR function's
+       `Cannot find module './server/main.js'`.
+   - **Where the rest was covered:** restart, stop and Ctrl-C were verified on
+     example 14 (steps 4–5): idle → waiting → connected, a new generation
+     with no duplicates, a 2 s clean shutdown with nothing left behind.
+     Running them on molzait itself only needs `parsed_logs: { source:
+     firebase }` on its `emulators` process once it uses this orckit.
 
 ## 5. Risks and open points
 

@@ -13,7 +13,18 @@ import {
   formatBuildStatusText,
   formatWaitForBuildText,
   type OrckitView,
+  buildFunctionLogs,
+  formatFunctionLogsText,
+  type ParsedLogsView,
 } from '../../src/mcp/tools.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  createFirebaseLogAssembler,
+  type FirebaseLogBundle,
+  type FirebaseLogEntry,
+} from '../../src/logs/firebase.js';
 import type { BuildTracker } from '../../src/process/build-tracker.js';
 import type { BuildStatus } from '../../src/process/parsers.js';
 import { validateConfig } from '../../src/config/load.js';
@@ -535,5 +546,176 @@ describe('build formatters', () => {
       timedOut: false,
     });
     expect(text).toMatch(/already settled/);
+  });
+});
+
+describe('get_function_logs', () => {
+  const fixtures = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/firebase-logging');
+  /** Entries the real assembler makes of recorded fixtures, renumbered into one timeline. */
+  const assembled = (...files: string[]): FirebaseLogEntry[] =>
+    files
+      .flatMap((f) => {
+        const a = createFirebaseLogAssembler();
+        const bundles = readFileSync(join(fixtures, f), 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as FirebaseLogBundle);
+        return [...bundles.flatMap((b) => a.push(b)), ...a.flush()];
+      })
+      .map((e, id) => ({ ...e, id }));
+
+  const ENTRIES = assembled(
+    'concurrent-burst-404.jsonl',
+    'migration-with-stripe-error.jsonl',
+    'structured-logger.synthetic.jsonl',
+  );
+
+  function view(
+    processes: Record<string, FirebaseLogEntry[]> = { emulators: ENTRIES },
+  ): ParsedLogsView {
+    return {
+      names: () => Object.keys(processes),
+      state: (name) =>
+        name in processes
+          ? { source: 'firebase', state: 'connected', url: 'ws://127.0.0.1:4500' }
+          : undefined,
+      entries: (name, limit) => (processes[name] ?? []).slice(-(limit ?? Infinity)),
+      generation: (name) => (name in processes ? 3 : 0),
+    };
+  }
+
+  it('returns request logs by default — no executions or system lines', () => {
+    const result = buildFunctionLogs(view(), {});
+    expect(result).toMatchObject({ name: 'emulators', source: 'connected', generation: 3 });
+    expect(result.total).toBe(ENTRIES.length);
+    expect(result.entries.every((e) => e.kind === 'log')).toBe(true);
+    expect(result.matched).toBe(ENTRIES.filter((e) => e.kind === 'log').length);
+  });
+
+  it('filters by handler substring and hands fields over as plain JSON', () => {
+    const result = buildFunctionLogs(view(), { handler: 'widgetcontroller' });
+    expect(result.matched).toBe(8);
+    const first = result.entries[0]!;
+    expect(first).toMatchObject({
+      kind: 'log',
+      function: 'europe-west1-api',
+      handler: 'WidgetController.getBootstrapData',
+      level: 'info',
+      message: 'WidgetController.getBootstrapData executed',
+      fields: {
+        controller: 'WidgetController',
+        method: 'GET',
+        status: 404,
+        pathParams: { restaurantId: expect.stringMatching(/^probe-\d$/) },
+      },
+    });
+    expect(first.time).toMatch(/^\d{4}-\d\d-\d\dT/);
+  });
+
+  it('filters by function — full or short name — and status', () => {
+    expect(buildFunctionLogs(view(), { function: 'api', status: '404' }).matched).toBe(8);
+    expect(buildFunctionLogs(view(), { function: 'europe-west1-api', status: '4xx' }).matched).toBe(
+      9,
+    );
+    expect(buildFunctionLogs(view(), { status: '5xx' }).matched).toBe(0);
+    expect(buildFunctionLogs(view(), { function: 'orders' }).entries.map((e) => e.message)).toEqual(
+      ['Order placed', 'Slow query', 'Payment failed Error: card_declined'],
+    );
+  });
+
+  it('filters by minimum level and keeps the stack of errors', () => {
+    const warn = buildFunctionLogs(view(), { level: 'warn' });
+    expect(warn.entries.every((e) => e.level === 'warn' || e.level === 'error')).toBe(true);
+    expect(warn.entries.filter((e) => e.context === 'AllExceptionsFilter')).toHaveLength(8);
+
+    const errors = buildFunctionLogs(view(), { level: 'error' });
+    const stripe = errors.entries.find((e) => e.message?.startsWith('Failed to add product tags'))!;
+    expect(stripe.stack).toMatch(/^\s+at generateV1Error/);
+    expect(stripe.fields).toMatchObject({ type: 'StripeInvalidRequestError', statusCode: 404 });
+  });
+
+  it('searches message, stack and fields', () => {
+    expect(buildFunctionLogs(view(), { search: 'probe-3' }).matched).toBe(1);
+    expect(buildFunctionLogs(view(), { search: 'GENERATEV1ERROR' }).matched).toBe(2);
+    expect(buildFunctionLogs(view(), { search: 'resource_missing' }).matched).toBe(2);
+  });
+
+  it('includes executions and system lines on request', () => {
+    const withExec = buildFunctionLogs(view(), {
+      include_executions: true,
+      function: 'api',
+      limit: 500,
+    });
+    expect(withExec.entries.filter((e) => e.kind === 'execution')).toHaveLength(10);
+    expect(withExec.entries.find((e) => e.kind === 'execution')!.durationMs).toBeGreaterThan(0);
+
+    const system = assembled('startup.jsonl');
+    const withSystem = buildFunctionLogs(view({ emulators: system }), { include_system: true });
+    expect(withSystem.matched).toBe(system.length);
+    expect(buildFunctionLogs(view({ emulators: system }), {}).matched).toBe(0);
+  });
+
+  it('brings emulator load errors along when asked for warnings or errors', () => {
+    const system = assembled('startup.jsonl');
+    const errors = buildFunctionLogs(view({ emulators: system }), { level: 'error' });
+    expect(errors.matched).toBeGreaterThan(0);
+    expect(errors.entries.every((e) => e.kind === 'system' && e.level === 'error')).toBe(true);
+    expect(errors.entries.map((e) => e.message)).toContainEqual(
+      expect.stringMatching(/^Failed to load function definition/),
+    );
+    // Multi-line messages (`Require stack:` …) stay inside their entry's block.
+    const text = formatFunctionLogsText(errors);
+    expect(text).toContain('Require stack:');
+    expect(
+      text
+        .split('\n')
+        .slice(1)
+        .every((l) => l.startsWith('  ')),
+    ).toBe(true);
+    expect(
+      buildFunctionLogs(view({ emulators: system }), { level: 'warn' }).matched,
+    ).toBeGreaterThan(errors.matched);
+    // Explicitly off still means off; info-level queries stay request logs only.
+    expect(
+      buildFunctionLogs(view({ emulators: system }), { level: 'error', include_system: false })
+        .matched,
+    ).toBe(0);
+    expect(buildFunctionLogs(view({ emulators: system }), { level: 'info' }).matched).toBe(0);
+  });
+
+  it('returns the newest `limit` matches and says how many there were', () => {
+    const result = buildFunctionLogs(view(), { handler: 'WidgetController', limit: 3 });
+    expect(result.matched).toBe(8);
+    expect(result.entries.map((e) => e.id)).toEqual(
+      buildFunctionLogs(view(), { handler: 'WidgetController' })
+        .entries.slice(-3)
+        .map((e) => e.id),
+    );
+  });
+
+  it('resolves the process: implicit with one source, required with several', () => {
+    expect(() => buildFunctionLogs(view({}), {})).toThrow(/no process has parsed_logs/);
+    const two = view({ a: ENTRIES, b: [] });
+    expect(() => buildFunctionLogs(two, {})).toThrow(/pass name \(one of: a, b\)/);
+    expect(buildFunctionLogs(two, { name: 'b' })).toMatchObject({ name: 'b', total: 0 });
+    expect(() => buildFunctionLogs(two, { name: 'web' })).toThrow(/"web" has no parsed_logs/);
+  });
+
+  it('formats compact text lines with a capped stack', () => {
+    const text = formatFunctionLogsText(
+      buildFunctionLogs(view(), { level: 'error', include_executions: true }),
+    );
+    const [head, ...lines] = text.split('\n');
+    expect(head).toMatch(/^emulators — parsed logs connected · \d+ of \d+ entries match$/);
+    expect(lines.find((l) => l.includes('Failed to add product tags'))).toMatch(
+      /^ {2}\d\d:\d\d:\d\d\.\d{3} ERROR core_v2-migrateHttp Failed to add product tags .*\{"type":"StripeInvalidRequestError"/,
+    );
+    // Four frames at most per entry in the text; the JSON keeps them all.
+    expect(lines.filter((l) => l.startsWith('      at ')).length).toBeLessThanOrEqual(4 * 3);
+
+    const empty = formatFunctionLogsText(
+      buildFunctionLogs(view(), { search: 'nothing-like-this' }),
+    );
+    expect(empty).toMatch(/0 of \d+ entries match\n {2}\(no matching entries\)$/);
   });
 });

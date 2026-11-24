@@ -481,7 +481,7 @@ In the [web dashboard](#live-dashboard) the process gets a **Parsed** tab (opene
 - **Rows**: an execution is `ƒ <function>` with its duration (colored by speed); a request log shows its handler, method, status, latency and route as chips plus a one-line preview of the rest of the object. Click a row to expand the object as a collapsible, syntax-highlighted tree (with a "copy as JSON" button) and the stack, whose file references open in your IDE like in the Logs tab.
 - **Live**: it follows new entries while you're at the bottom, and pauses while the pointer is over the list so rows don't slide away under a click. The newest 400 matching entries are rendered; older ones load in pages from the top.
 
-The same entries are available over HTTP: `GET /api/logs/<name>?limit=N` returns the newest entries, and the `/events` stream carries `parsed:entries`, `parsed:reset` and `parsed:state` events. Every reconnect replays the emulator's whole history, so it starts a new `generation`: entry ids restart at 0 and a client drops whatever it held when `parsed:reset` arrives.
+Agents get the same entries from the [MCP server](#mcp-server)'s `get_function_logs` tool, filtered by function, handler, level, status or text. They are also available over HTTP: `GET /api/logs/<name>?limit=N` returns the newest entries, and the `/events` stream carries `parsed:entries`, `parsed:reset` and `parsed:state` events. Every reconnect replays the emulator's whole history, so it starts a new `generation`: entry ids restart at 0 and a client drops whatever it held when `parsed:reset` arrives.
 
 Firebase doesn't tag log lines with an execution id, so entries are never grouped under the execution that produced them: concurrent calls of one function interleave in no fixed order.
 
@@ -505,6 +505,7 @@ Run that `claude mcp add` command once. From then on, Claude Code can call:
 | `get_logs` | Recent stdout/stderr for a named process (`{name, lines?, stream?}`) |
 | `get_build_status` | Build phase (building/done/failed), error/warning counts, duration, and failure diagnostics per build process (`{name?}` — omit for all) |
 | `wait_for_build` | Blocks until the named process's build settles, then returns success/failure with diagnostics (`{name, timeout_ms?}`) |
+| `get_function_logs` | Only offered when a process has [`parsed_logs`](#parsed-firebase-emulator-logs). The Firebase functions' logs as structured entries — function, `Controller.method` handler, level, message, the logged object as JSON, error stacks — filtered by `{name?, function?, handler?, level?, status?, search?, include_executions?, include_system?, limit?}` (`level` is a minimum, `status` is `404` or `5xx`; executions and the emulator's own lines are left out unless asked for, except that `level: warn`/`error` includes emulator load errors) |
 
 `get_build_status` and `wait_for_build` let an agent **defer to orckit's running build instead of spawning its own**: orckit already runs the project's `webpack`/`angular` watch processes, so an agent verifying a change should `wait_for_build` for the result rather than starting a duplicate compile. (Build phase is only tracked for process `type`s with a parser — currently `webpack` and `angular`.)
 

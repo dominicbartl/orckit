@@ -19,7 +19,11 @@ orc start -c examples/14-firebase-parsed-logs/orckit.yaml
 tab. Pick `OrdersController.get` in the Handler filter, search for `not found`
 to see the thrown errors, or click a row to expand its object.
 
-The same entries come from the dashboard's API:
+With the [MCP server](../10-mcp) registered, an agent gets them through
+`get_function_logs` — e.g. `{ function: 'orders', level: 'error' }` for the
+thrown errors with their stacks, or `{ handler: 'OrdersController' }` for the
+request logs. The same entries come from the
+dashboard's API:
 
 ```bash
 curl -s 'http://127.0.0.1:7677/api/logs/emulators?limit=5'

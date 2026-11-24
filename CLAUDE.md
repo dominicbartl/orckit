@@ -93,8 +93,11 @@ src/
                       # exposes the running Orckit instance to MCP clients
     tools.ts          # Pure handlers for the read-only tools (get_status /
                       # get_errors / get_logs / get_build_status /
-                      # wait_for_build). wait_for_build long-polls process:build
-                      # until the build settles (quiet-period debounce).
+                      # wait_for_build / get_function_logs). wait_for_build
+                      # long-polls process:build until the build settles
+                      # (quiet-period debounce). get_function_logs reads the
+                      # shared trackParsedLogs tracker the CLI passes in and is
+                      # only registered when a process has parsed_logs.
 
   sandbox/            # worktree sandboxes — CLI-only, the orchestrator never sees them
     worktree.ts       # detectCheckout (git rev-parse: linked worktree or main

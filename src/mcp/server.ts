@@ -10,6 +10,7 @@ import type { Orckit } from '../orchestrator/orchestrator.js';
 import { trackBuilds } from '../process/build-tracker.js';
 import { ORCKIT_VERSION } from '../util/version.js';
 import { registerTools } from './tools.js';
+import type { ParsedLogTracker } from '../logs/tracker.js';
 
 export interface McpServerOptions {
   /** Port to bind. Use 0 to pick an arbitrary free port (handy for tests). */
@@ -20,6 +21,11 @@ export interface McpServerOptions {
   path?: string;
   /** Maps a process URL to the one the client can reach (sandbox rewrite). */
   publicUrl?: (url: string) => string;
+  /**
+   * Parsed log sources (`parsed_logs`), shared with the web dashboard since it
+   * owns the emulator sockets; not disposed here. Enables `get_function_logs`.
+   */
+  parsedLogs?: ParsedLogTracker | null;
 }
 
 export interface McpServerHandle {
@@ -34,7 +40,8 @@ export interface McpServerHandle {
 /**
  * Attach an in-process MCP server to an Orckit instance. The server exposes
  * read-only tools (`get_status`, `get_errors`, `get_logs`, `get_build_status`,
- * `wait_for_build`) over Streamable HTTP and is intended to be hit by Claude
+ * `wait_for_build`, and `get_function_logs` when a process has `parsed_logs`)
+ * over Streamable HTTP and is intended to be hit by Claude
  * Code or any other MCP client.
  *
  * Returns a handle whose `dispose()` cleanly closes the HTTP listener and
@@ -67,7 +74,7 @@ export async function attachMcpServer(
       { name: 'orckit', version: ORCKIT_VERSION },
       { capabilities: { tools: {} } },
     );
-    registerTools(mcp, orckit, lastErrors, tracker, opts.publicUrl);
+    registerTools(mcp, orckit, lastErrors, tracker, opts.publicUrl, opts.parsedLogs);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close().catch(() => {});
