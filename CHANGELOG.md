@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/dominicbartl/orckit/compare/v0.6.0...v0.7.0) (2026-11-24)
+
+
+### Features
+
+* **mcp:** `get_function_logs` — structured Firebase function logs for agents ([1f31968](https://github.com/dominicbartl/orckit/commit/1f31968f88420c05eb25d6f5d8f1da37734eefc1))
+* parse Firebase emulator logs into structured entries (`parsed_logs`) ([28147c6](https://github.com/dominicbartl/orckit/commit/28147c6cec3e036a37e15e33f0326c90abdc04b6))
+* show a clickable root URL per process ([3b9672b](https://github.com/dominicbartl/orckit/commit/3b9672b7abd9c3b5667474b0730ecfde7c7304e3))
+* **web-ui:** Parsed tab for `parsed_logs` processes ([6d967ee](https://github.com/dominicbartl/orckit/commit/6d967eec69f748429231fb0b43cbb050857cf647))
+
+
+### Bug Fixes
+
+* base the pre-boot port check on the --no-mcp / --*-port flags ([8c3ad3f](https://github.com/dominicbartl/orckit/commit/8c3ad3fbd2129cd7b56201d56bc3b43f33b5ea5e))
+* **logs:** don't open a block on a stray bracket in prose ([892a72e](https://github.com/dominicbartl/orckit/commit/892a72e8a70405a3513894eb72bca86f16553b6d))
+* **logs:** report the logging emulator as booting, not missing, at start ([b4e60a1](https://github.com/dominicbartl/orckit/commit/b4e60a11aa1cbeb19daf9536071dfe0528edf809))
+* tighten process URL validation and normalisation ([7424e92](https://github.com/dominicbartl/orckit/commit/7424e9243e06a4ef7d112aae5576e34dd176e857))
+* **web-ui:** focus the facet filter box when a long facet opens ([f481b3f](https://github.com/dominicbartl/orckit/commit/f481b3f4b52b6a15824b5c9963401e3c27eb3d07))
+
 ## [0.6.0](https://github.com/dominicbartl/orckit/compare/v0.5.0...v0.6.0) (2026-10-26)
 
 
