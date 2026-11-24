@@ -28,6 +28,7 @@ export function MultiSelect(props: {
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal('');
   let root: HTMLDivElement | undefined;
+  let filterInput: HTMLInputElement | undefined;
 
   const isOn = (value: string) => props.selected === null || props.selected.has(value);
 
@@ -64,6 +65,8 @@ export function MultiSelect(props: {
   // Close on an outside click or Escape while open.
   createEffect(() => {
     if (!open()) return;
+    // A long list is opened to search it: type straight away.
+    queueMicrotask(() => filterInput?.focus());
     const onDown = (e: MouseEvent) => {
       if (root && !root.contains(e.target as Node)) setOpen(false);
     };
@@ -117,6 +120,7 @@ export function MultiSelect(props: {
           </div>
           <Show when={props.options.length > 8}>
             <input
+              ref={filterInput}
               type="text"
               placeholder="filter…"
               value={query()}
